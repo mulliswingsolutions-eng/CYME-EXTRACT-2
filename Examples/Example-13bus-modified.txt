@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--Copyright (c) 1986-2018, CYME International T&D-->
-<!--Generated on 2025-08-08 12:15:39 PM-->
+<!--Generated on 2025-08-08 3:32:48 PM-->
 <Cyme xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" Version="9.0" Revision="4">
 <Version>9.0</Version>
 <Revision>4</Revision>
@@ -192,7 +192,7 @@
 <Section>
 <SectionID>L650_632</SectionID>
 <OwnerID>650</OwnerID>
-<FromNodeID>RG60</FromNodeID>
+<FromNodeID>651</FromNodeID>
 <FromNodeConnectorIndex>0</FromNodeConnectorIndex>
 <ToNodeID>632</ToNodeID>
 <ToNodeConnectorIndex>0</ToNodeConnectorIndex>
@@ -837,7 +837,7 @@
 <OwnerID>650</OwnerID>
 <FromNodeID>650</FromNodeID>
 <FromNodeConnectorIndex>0</FromNodeConnectorIndex>
-<ToNodeID>632</ToNodeID>
+<ToNodeID>651</ToNodeID>
 <ToNodeConnectorIndex>0</ToNodeConnectorIndex>
 <TertiaryNodeID/>
 <TertiaryNodeConnectorIndex>0</TertiaryNodeConnectorIndex>
@@ -890,8 +890,8 @@
 <Reversible>0</Reversible>
 <SymbolSize>0.000000</SymbolSize>
 <Position>
-<X>-101.960288</X>
-<Y>166.117116</Y>
+<X>-102.082479</X>
+<Y>183.814029</Y>
 </Position>
 <FaultIndicator>NoFaultIndicator</FaultIndicator>
 <Automated>0</Automated>
@@ -1284,8 +1284,8 @@ VC=$VpuC$ pu / $PH-AngleC$ deg
 IA=$IA$ A / $IAngleA$ deg
 IB=$IB$ A / $IAngleB$ deg
 IC=$IC$ A / $IAngleC$ deg</Text>
-<DeltaX>4.197721</DeltaX>
-<DeltaY>64.500000</DeltaY>
+<DeltaX>55.235487</DeltaX>
+<DeltaY>99.833838</DeltaY>
 <Angle>0.000000</Angle>
 <Location>Standard</Location>
 <Prop>290851</Prop>
@@ -1909,8 +1909,8 @@ VC=$VpuC$ pu / $PH-AngleC$ deg
 IA=$IA$ A / $IAngleA$ deg
 IB=$IB$ A / $IAngleB$ deg
 IC=$IC$ A / $IAngleC$ deg</Text>
-<DeltaX>-6.612383</DeltaX>
-<DeltaY>65.053181</DeltaY>
+<DeltaX>-92.983987</DeltaX>
+<DeltaY>100.387019</DeltaY>
 <Angle>0.000000</Angle>
 <Location>Standard</Location>
 <Prop>24579</Prop>
@@ -1952,8 +1952,8 @@ VC=$VpuC$ pu / $PH-AngleC$ deg
 IA=$IA$ A / $IAngleA$ deg
 IB=$IB$ A / $IAngleB$ deg
 IC=$IC$ A / $IAngleC$ deg</Text>
-<DeltaX>3.725374</DeltaX>
-<DeltaY>37.094315</DeltaY>
+<DeltaX>2.416713</DeltaX>
+<DeltaY>80.280117</DeltaY>
 <Angle>0.000000</Angle>
 <Location>Standard</Location>
 <Prop>24579</Prop>
@@ -2055,8 +2055,8 @@ VC=$VpuC$ pu / $PH-AngleC$ deg
 IA=$IA$ A / $IAngleA$ deg
 IB=$IB$ A / $IAngleB$ deg
 IC=$IC$ A / $IAngleC$ deg</Text>
-<DeltaX>1.581533</DeltaX>
-<DeltaY>31.847200</DeltaY>
+<DeltaX>2.890194</DeltaX>
+<DeltaY>54.094431</DeltaY>
 <Angle>0.000000</Angle>
 <Location>Standard</Location>
 <Prop>290851</Prop>
@@ -2138,8 +2138,8 @@ VC=$VpuC$ pu / $PH-AngleC$ deg
 IA=$IA$ A / $IAngleA$ deg
 IB=$IB$ A / $IAngleB$ deg
 IC=$IC$ A / $IAngleC$ deg</Text>
-<DeltaX>-0.854973</DeltaX>
-<DeltaY>-49.489308</DeltaY>
+<DeltaX>-167.054878</DeltaX>
+<DeltaY>-215.689213</DeltaY>
 <Angle>0.000000</Angle>
 <Location>Standard</Location>
 <Prop>24579</Prop>
@@ -2225,8 +2225,8 @@ VC=$VpuC$ pu / $PH-AngleC$ deg
 IA=$IA$ A / $IAngleA$ deg
 IB=$IB$ A / $IAngleB$ deg
 IC=$IC$ A / $IAngleC$ deg</Text>
-<DeltaX>6.248912</DeltaX>
-<DeltaY>63.487717</DeltaY>
+<DeltaX>171.140157</DeltaX>
+<DeltaY>-43.822458</DeltaY>
 <Angle>0.000000</Angle>
 <Location>Standard</Location>
 <Prop>24579</Prop>
@@ -2242,14 +2242,14 @@ IC=$IC$ A / $IAngleC$ deg</Text>
 </Tag>
 </Node>
 <Node>
-<NodeID>RG60</NodeID>
+<NodeID>651</NodeID>
 <ZoneID/>
 <UserDefinedBaseVoltage>0.000000</UserDefinedBaseVoltage>
 <Installation>OpenAir</Installation>
 <Connectors>
 <Point>
-<X>-102.134091</X>
-<Y>-103.005827</Y>
+<X>-103.416076</X>
+<Y>65.417434</Y>
 </Point>
 </Connectors>
 <OptimalPowerFlowNode>
@@ -2268,8 +2268,8 @@ VC=$VpuC$ pu / $PH-AngleC$ deg
 IA=$IA$ A / $IAngleA$ deg
 IB=$IB$ A / $IAngleB$ deg
 IC=$IC$ A / $IAngleC$ deg</Text>
-<DeltaX>-62.994611</DeltaX>
-<DeltaY>-77.338722</DeltaY>
+<DeltaX>-102.771614</DeltaX>
+<DeltaY>-56.115387</DeltaY>
 <Angle>0.000000</Angle>
 <Location>Standard</Location>
 <Prop>24579</Prop>
@@ -2311,8 +2311,8 @@ VC=$VpuC$ pu / $PH-AngleC$ deg
 IA=$IA$ A / $IAngleA$ deg
 IB=$IB$ A / $IAngleB$ deg
 IC=$IC$ A / $IAngleC$ deg</Text>
-<DeltaX>64.280694</DeltaX>
-<DeltaY>-44.107356</DeltaY>
+<DeltaX>59.046051</DeltaX>
+<DeltaY>-199.837976</DeltaY>
 <Angle>0.000000</Angle>
 <Location>Standard</Location>
 <Prop>24579</Prop>
@@ -2414,8 +2414,8 @@ VC=$VpuC$ pu / $PH-AngleC$ deg
 IA=$IA$ A / $IAngleA$ deg
 IB=$IB$ A / $IAngleB$ deg
 IC=$IC$ A / $IAngleC$ deg</Text>
-<DeltaX>69.572440</DeltaX>
-<DeltaY>-48.128098</DeltaY>
+<DeltaX>153.326723</DeltaX>
+<DeltaY>-107.017828</DeltaY>
 <Angle>0.000000</Angle>
 <Location>Standard</Location>
 <Prop>290851</Prop>
@@ -2457,8 +2457,8 @@ VC=$VpuC$ pu / $PH-AngleC$ deg
 IA=$IA$ A / $IAngleA$ deg
 IB=$IB$ A / $IAngleB$ deg
 IC=$IC$ A / $IAngleC$ deg</Text>
-<DeltaX>4.276814</DeltaX>
-<DeltaY>38.692530</DeltaY>
+<DeltaX>-93.872736</DeltaX>
+<DeltaY>70.100386</DeltaY>
 <Angle>0.000000</Angle>
 <Location>Standard</Location>
 <Prop>24579</Prop>
@@ -2500,8 +2500,8 @@ VC=$VpuC$ pu / $PH-AngleC$ deg
 IA=$IA$ A / $IAngleA$ deg
 IB=$IB$ A / $IAngleB$ deg
 IC=$IC$ A / $IAngleC$ deg</Text>
-<DeltaX>13.661897</DeltaX>
-<DeltaY>50.552428</DeltaY>
+<DeltaX>209.960998</DeltaX>
+<DeltaY>-164.067922</DeltaY>
 <Angle>0.000000</Angle>
 <Location>Standard</Location>
 <Prop>24579</Prop>
@@ -2563,8 +2563,8 @@ VC=$VpuC$ pu / $PH-AngleC$ deg
 IA=$IA$ A / $IAngleA$ deg
 IB=$IB$ A / $IAngleB$ deg
 IC=$IC$ A / $IAngleC$ deg</Text>
-<DeltaX>53.939929</DeltaX>
-<DeltaY>7.962038</DeltaY>
+<DeltaX>-155.445779</DeltaX>
+<DeltaY>-82.335548</DeltaY>
 <Angle>0.000000</Angle>
 <Location>Standard</Location>
 <Prop>24579</Prop>
@@ -2606,8 +2606,8 @@ VC=$VpuC$ pu / $PH-AngleC$ deg
 IA=$IA$ A / $IAngleA$ deg
 IB=$IB$ A / $IAngleB$ deg
 IC=$IC$ A / $IAngleC$ deg</Text>
-<DeltaX>3.158036</DeltaX>
-<DeltaY>37.524306</DeltaY>
+<DeltaX>-121.164728</DeltaX>
+<DeltaY>2.190468</DeltaY>
 <Angle>0.000000</Angle>
 <Location>Standard</Location>
 <Prop>24579</Prop>
@@ -2669,8 +2669,8 @@ VC=$VpuC$ pu / $PH-AngleC$ deg
 IA=$IA$ A / $IAngleA$ deg
 IB=$IB$ A / $IAngleB$ deg
 IC=$IC$ A / $IAngleC$ deg</Text>
-<DeltaX>-8.669266</DeltaX>
-<DeltaY>48.818164</DeltaY>
+<DeltaX>64.615732</DeltaX>
+<DeltaY>-195.901382</DeltaY>
 <Angle>0.000000</Angle>
 <Location>Standard</Location>
 <Prop>24579</Prop>
@@ -6092,12 +6092,12 @@ IC=$IC$ A / $IAngleC$ deg</Text>
 </StudyParameters>
 <CalculationParameters>
 <GlobalParameters>
-<Frequency>60.000000</Frequency>
+<Frequency>67.000000</Frequency>
 <EarthResistance>100.000000</EarthResistance>
 <BaseVoltageCustomerSide>120.000000</BaseVoltageCustomerSide>
 <ConductorTemperature>25.000000</ConductorTemperature>
 <HLinPar>0</HLinPar>
-<BaseMVA>100.000000</BaseMVA>
+<BaseMVA>117.000000</BaseMVA>
 <DCBasePower>500.000000</DCBasePower>
 <UseDistributedLineModel>0</UseDistributedLineModel>
 <DistributedLineModelLimit>250.000000</DistributedLineModelLimit>
@@ -6151,6 +6151,99 @@ IC=$IC$ A / $IAngleC$ deg</Text>
 <HighVoltageLimit4>105.000000</HighVoltageLimit4>
 <HighVoltageLimit5>105.000000</HighVoltageLimit5>
 </LoadFlowGlobalVoltageLimits>
+<LoadFlowCustomerVoltageLimits>
+<LoadFlowCustomerVoltageLimit>
+<LowVoltageLimit1>95.000000</LowVoltageLimit1>
+<LowVoltageLimit2>95.000000</LowVoltageLimit2>
+<LowVoltageLimit3>95.000000</LowVoltageLimit3>
+<LowVoltageLimit4>95.000000</LowVoltageLimit4>
+<LowVoltageLimit5>95.000000</LowVoltageLimit5>
+<HighVoltageLimit1>105.000000</HighVoltageLimit1>
+<HighVoltageLimit2>105.000000</HighVoltageLimit2>
+<HighVoltageLimit3>105.000000</HighVoltageLimit3>
+<HighVoltageLimit4>105.000000</HighVoltageLimit4>
+<HighVoltageLimit5>105.000000</HighVoltageLimit5>
+<CustomerType>Commercial</CustomerType>
+</LoadFlowCustomerVoltageLimit>
+<LoadFlowCustomerVoltageLimit>
+<LowVoltageLimit1>95.000000</LowVoltageLimit1>
+<LowVoltageLimit2>95.000000</LowVoltageLimit2>
+<LowVoltageLimit3>95.000000</LowVoltageLimit3>
+<LowVoltageLimit4>95.000000</LowVoltageLimit4>
+<LowVoltageLimit5>95.000000</LowVoltageLimit5>
+<HighVoltageLimit1>105.000000</HighVoltageLimit1>
+<HighVoltageLimit2>105.000000</HighVoltageLimit2>
+<HighVoltageLimit3>105.000000</HighVoltageLimit3>
+<HighVoltageLimit4>105.000000</HighVoltageLimit4>
+<HighVoltageLimit5>105.000000</HighVoltageLimit5>
+<CustomerType>I</CustomerType>
+</LoadFlowCustomerVoltageLimit>
+<LoadFlowCustomerVoltageLimit>
+<LowVoltageLimit1>95.000000</LowVoltageLimit1>
+<LowVoltageLimit2>95.000000</LowVoltageLimit2>
+<LowVoltageLimit3>95.000000</LowVoltageLimit3>
+<LowVoltageLimit4>95.000000</LowVoltageLimit4>
+<LowVoltageLimit5>95.000000</LowVoltageLimit5>
+<HighVoltageLimit1>105.000000</HighVoltageLimit1>
+<HighVoltageLimit2>105.000000</HighVoltageLimit2>
+<HighVoltageLimit3>105.000000</HighVoltageLimit3>
+<HighVoltageLimit4>105.000000</HighVoltageLimit4>
+<HighVoltageLimit5>105.000000</HighVoltageLimit5>
+<CustomerType>Industrial</CustomerType>
+</LoadFlowCustomerVoltageLimit>
+<LoadFlowCustomerVoltageLimit>
+<LowVoltageLimit1>95.000000</LowVoltageLimit1>
+<LowVoltageLimit2>95.000000</LowVoltageLimit2>
+<LowVoltageLimit3>95.000000</LowVoltageLimit3>
+<LowVoltageLimit4>95.000000</LowVoltageLimit4>
+<LowVoltageLimit5>95.000000</LowVoltageLimit5>
+<HighVoltageLimit1>105.000000</HighVoltageLimit1>
+<HighVoltageLimit2>105.000000</HighVoltageLimit2>
+<HighVoltageLimit3>105.000000</HighVoltageLimit3>
+<HighVoltageLimit4>105.000000</HighVoltageLimit4>
+<HighVoltageLimit5>105.000000</HighVoltageLimit5>
+<CustomerType>Other</CustomerType>
+</LoadFlowCustomerVoltageLimit>
+<LoadFlowCustomerVoltageLimit>
+<LowVoltageLimit1>95.000000</LowVoltageLimit1>
+<LowVoltageLimit2>95.000000</LowVoltageLimit2>
+<LowVoltageLimit3>95.000000</LowVoltageLimit3>
+<LowVoltageLimit4>95.000000</LowVoltageLimit4>
+<LowVoltageLimit5>95.000000</LowVoltageLimit5>
+<HighVoltageLimit1>105.000000</HighVoltageLimit1>
+<HighVoltageLimit2>105.000000</HighVoltageLimit2>
+<HighVoltageLimit3>105.000000</HighVoltageLimit3>
+<HighVoltageLimit4>105.000000</HighVoltageLimit4>
+<HighVoltageLimit5>105.000000</HighVoltageLimit5>
+<CustomerType>PQ</CustomerType>
+</LoadFlowCustomerVoltageLimit>
+<LoadFlowCustomerVoltageLimit>
+<LowVoltageLimit1>95.000000</LowVoltageLimit1>
+<LowVoltageLimit2>95.000000</LowVoltageLimit2>
+<LowVoltageLimit3>95.000000</LowVoltageLimit3>
+<LowVoltageLimit4>95.000000</LowVoltageLimit4>
+<LowVoltageLimit5>95.000000</LowVoltageLimit5>
+<HighVoltageLimit1>105.000000</HighVoltageLimit1>
+<HighVoltageLimit2>105.000000</HighVoltageLimit2>
+<HighVoltageLimit3>105.000000</HighVoltageLimit3>
+<HighVoltageLimit4>105.000000</HighVoltageLimit4>
+<HighVoltageLimit5>105.000000</HighVoltageLimit5>
+<CustomerType>Residential</CustomerType>
+</LoadFlowCustomerVoltageLimit>
+<LoadFlowCustomerVoltageLimit>
+<LowVoltageLimit1>95.000000</LowVoltageLimit1>
+<LowVoltageLimit2>95.000000</LowVoltageLimit2>
+<LowVoltageLimit3>95.000000</LowVoltageLimit3>
+<LowVoltageLimit4>95.000000</LowVoltageLimit4>
+<LowVoltageLimit5>95.000000</LowVoltageLimit5>
+<HighVoltageLimit1>105.000000</HighVoltageLimit1>
+<HighVoltageLimit2>105.000000</HighVoltageLimit2>
+<HighVoltageLimit3>105.000000</HighVoltageLimit3>
+<HighVoltageLimit4>105.000000</HighVoltageLimit4>
+<HighVoltageLimit5>105.000000</HighVoltageLimit5>
+<CustomerType>Z</CustomerType>
+</LoadFlowCustomerVoltageLimit>
+</LoadFlowCustomerVoltageLimits>
 <UseGlobalVoltageLimits>1</UseGlobalVoltageLimits>
 <ApplyCustomerTypeVoltageLimits>0</ApplyCustomerTypeVoltageLimits>
 <AssumeLineTransposition>0</AssumeLineTransposition>
@@ -6170,7 +6263,7 @@ IC=$IC$ A / $IAngleC$ deg</Text>
 <LockMultiStageSwitchableShunts>0</LockMultiStageSwitchableShunts>
 <AdjustDCLinks>1</AdjustDCLinks>
 <IncludeDCSystems>0</IncludeDCSystems>
-<DCLoadFlowParametersConfigID/>
+<DCLoadFlowParametersConfigID>DEFAULT</DCLoadFlowParametersConfigID>
 <IgnoreDEROperatingLimits>0</IgnoreDEROperatingLimits>
 <PerformLoadDiversification>0</PerformLoadDiversification>
 <ApplyDiversificationWithinCustomer>0</ApplyDiversificationWithinCustomer>
@@ -6785,18 +6878,23 @@ IC=$IC$ A / $IAngleC$ deg</Text>
 <EnableColorMap>0</EnableColorMap>
 <ColorCodingLayer>
 <LayerName>Conductor rating color (amps)</LayerName>
-<LayerCategory/>
-<ColorCodingType>None</ColorCodingType>
+<LayerCategory>General Layers</LayerCategory>
+<ColorCodingType>ConductorSize</ColorCodingType>
 </ColorCodingLayer>
+<ColorMapLayer>
+<LayerName>EPRI DRIVE™ Analysis - Hosting Capacity - Node Level (kW)</LayerName>
+<LayerCategory>EPRI DRIVE™ Analysis Layers</LayerCategory>
+<ColorMapType>EPRIDrive_MaxNodeCapacity</ColorMapType>
+</ColorMapLayer>
 <ResultTagLayer>
 <LayerName>No Tags</LayerName>
-<LayerCategory/>
-<ResultTagType>Default</ResultTagType>
+<LayerCategory>General</LayerCategory>
+<ResultTagType>Custom</ResultTagType>
 </ResultTagLayer>
 <TooltipLayer>
-<LayerName>Chute de tension</LayerName>
-<LayerCategory/>
-<TooltipType>Default</TooltipType>
+<LayerName>EPRI DRIVE™ Analysis Results</LayerName>
+<LayerCategory>Analysis</LayerCategory>
+<TooltipType>EPRIDriveAnalysisResults</TooltipType>
 </TooltipLayer>
 <DisplayIterationReport>0</DisplayIterationReport>
 <DisplayIterationReportNonConvergence>1</DisplayIterationReportNonConvergence>
@@ -6804,6 +6902,11 @@ IC=$IC$ A / $IAngleC$ deg</Text>
 </FlowAnalysisOutput>
 </LoadFlowParametersConfig>
 </ParametersConfigurations>
+<AnalysisNetworks>
+<SelectedNetworks>
+<NetworkID>650</NetworkID>
+</SelectedNetworks>
+</AnalysisNetworks>
 </LoadFlowParameters>
 <CapacitorPlacementParameters>
 <MinimizeKWLoss>0</MinimizeKWLoss>
@@ -11989,7 +12092,7 @@ IC=$IC$ A / $IAngleC$ deg</Text>
 <ToMonth>-1</ToMonth>
 </StudyChronology>
 <SaveCurrentPosition>0</SaveCurrentPosition>
-<CurrentTime>2025-08-08T12:01:41</CurrentTime>
+<CurrentTime>2025-08-08T00:00:00</CurrentTime>
 <CurrentPositionID/>
 <CurrentPosition>Legacy_After</CurrentPosition>
 <LoadNetworkOption>AllDependencies</LoadNetworkOption>
@@ -12002,10 +12105,10 @@ IC=$IC$ A / $IAngleC$ deg</Text>
 <NetworkID>650</NetworkID>
 </Networks>
 <Zoom>
-<Top>570.084729</Top>
-<Left>-857.762846</Left>
-<Right>606.628447</Right>
-<Bottom>-584.153984</Bottom>
+<Top>403.051887</Top>
+<Left>-797.006232</Left>
+<Right>667.385060</Right>
+<Bottom>-751.186826</Bottom>
 </Zoom>
 <Angle>0.000000</Angle>
 <Active>1</Active>
@@ -12115,8 +12218,8 @@ IC=$IC$ A / $IAngleC$ deg</Text>
 <ActiveDisplayLayerDesc>Network color (random)</ActiveDisplayLayerDesc>
 <AnalysisTagLayer>Analysis</AnalysisTagLayer>
 <AnalysisTagLayerDesc/>
-<ActiveTagLayer>Default</ActiveTagLayer>
-<ActiveTagLayerDesc>Default Tags</ActiveTagLayerDesc>
+<ActiveTagLayer>Custom</ActiveTagLayer>
+<ActiveTagLayerDesc>No Tags</ActiveTagLayerDesc>
 <ActiveTooltipLayer>Default</ActiveTooltipLayer>
 <ActiveTooltipLayerDesc>Default</ActiveTooltipLayerDesc>
 </OLDView>

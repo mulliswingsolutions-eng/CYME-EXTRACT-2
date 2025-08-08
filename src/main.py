@@ -1,239 +1,116 @@
-# src/main.py
+"""
+main.py
+-------
+End-to-end runner: parse a CYME text export and write three sheets to an XLSX:
+    - General
+    - Bus
+    - Voltage_Source
+"""
+
+from __future__ import annotations
+
 from pathlib import Path
-import xml.etree.ElementTree as ET
+import sys
+from pathlib import Path
 import pandas as pd
+# Utility function to ensure output path
+def _ensure_output_path(in_path: Path, out_arg: str | None) -> Path:
+    if out_arg:
+        return Path(out_arg).resolve()
+    return in_path.with_suffix(".xlsx")
 
-INPUT_SXST = r"Examples\Example-13bus-modified.txt"
-OUTPUT_XLSX = r"Outputs\CYME_Extract_13Bus.xlsx"
+# ===== USER-CONFIGURABLE PATHS =====
+INPUT_PATH = Path(
+    r"\Examples\Example-13bus-modified.txt"
+)
+OUTPUT_PATH = Path(
+    r"\Outputs\CYME_Extract_13Bus.xlsx"
+)
+# ===================================
 
-def text(el, default=""):
-    return el.text.strip() if el is not None and el.text is not None else default
+# Local imports
+from Modules.General import get_general
+from Modules.Bus import extract_bus_data
+from Modules.Voltage_Source import extract_voltage_source_data
 
-def get(root, path):
-    el = root.find(path)
-    return text(el)
 
-def all_elems(root, path):
-    return root.findall(path)
+def _fmt_num(x):
+    """Pretty number formatter: 60 -> '60', 60.5 -> '60.5'."""
+    try:
+        f = float(x)
+    except Exception:
+        return x
+    if f.is_integer():
+        return str(int(f))
+    return str(f)
 
-def parse_nodes(root):
-    rows = []
-    for n in all_elems(root, ".//Nodes/Node"):
-        rows.append({
-            "NodeID": get(n, "./NodeID"),
-            "UserDefinedBaseVoltage": get(n, "./UserDefinedBaseVoltage"),
-        })
-    return pd.DataFrame(rows)
-
-def parse_sections(root):
-    rows = []
-    for s in all_elems(root, ".//Sections/Section"):
-        rows.append({
-            "SectionID": get(s, "./SectionID"),
-            "FromNodeID": get(s, "./FromNodeID"),
-            "ToNodeID": get(s, "./ToNodeID"),
-            "Phase": get(s, "./Phase"),
-        })
-    return pd.DataFrame(rows)
-
-def parse_lines(root):
-    rows = []
-    for s in all_elems(root, ".//Sections/Section"):
-        # OverheadByPhase
-        for dev in all_elems(s, "./Devices/OverheadByPhase"):
-            rows.append({
-                "SectionID": get(s, "./SectionID"),
-                "LineType": "OverheadByPhase",
-                "Length": get(dev, "./Length"),
-                "ConductorPosition": get(dev, "./ConductorPosition"),
-                "PhaseA": get(dev, "./PhaseConductorIDA"),
-                "PhaseB": get(dev, "./PhaseConductorIDB"),
-                "PhaseC": get(dev, "./PhaseConductorIDC"),
-                "Neutral1": get(dev, "./NeutralConductorID1"),
-                "Neutral2": get(dev, "./NeutralConductorID2"),
-                "SpacingID": get(dev, "./ConductorSpacingID"),
-                "EarthResistivity": get(dev, "./EarthResistivity"),
-            })
-        # OverheadLineUnbalanced
-        for dev in all_elems(s, "./Devices/OverheadLineUnbalanced"):
-            rows.append({
-                "SectionID": get(s, "./SectionID"),
-                "LineType": "OverheadLineUnbalanced",
-                "Length": get(dev, "./Length"),
-                "LineID": get(dev, "./LineID"),
-                "ConductorPosition": "",
-                "PhaseA": "",
-                "PhaseB": "",
-                "PhaseC": "",
-                "Neutral1": "",
-                "Neutral2": "",
-                "SpacingID": "",
-                "EarthResistivity": "",
-            })
-    return pd.DataFrame(rows)
-
-def _per_phase_load_values(dev):
-    # Collect KW/KVAR per phase if present
-    ph = {"KW_A": "", "KVAR_A": "", "KW_B": "", "KVAR_B": "", "KW_C": "", "KVAR_C": ""}
-    for lv in all_elems(dev, ".//CustomerLoadValues/CustomerLoadValue"):
-        phase = get(lv, "./Phase").upper()
-        KW = get(lv, "./LoadValue/KW")
-        KVAR = get(lv, "./LoadValue/KVAR")
-        if phase == "A":
-            ph["KW_A"], ph["KVAR_A"] = KW, KVAR
-        elif phase == "B":
-            ph["KW_B"], ph["KVAR_B"] = KW, KVAR
-        elif phase == "C":
-            ph["KW_C"], ph["KVAR_C"] = KW, KVAR
-    return ph
-
-def parse_spot_loads(root):
-    rows = []
-    for s in all_elems(root, ".//Sections/Section"):
-        for dev in all_elems(s, "./Devices/SpotLoad"):
-            ph = _per_phase_load_values(dev)
-            rows.append({
-                "SectionID": get(s, "./SectionID"),
-                "FromNodeID": get(s, "./FromNodeID"),
-                "ToNodeID": get(s, "./ToNodeID"),
-                "DeviceNumber": get(dev, "./DeviceNumber"),
-                "ConnConfig": get(dev, "./ConnectionConfiguration"),
-                **ph
-            })
-    return pd.DataFrame(rows)
-
-def parse_dist_loads(root):
-    rows = []
-    for s in all_elems(root, ".//Sections/Section"):
-        for dev in all_elems(s, "./Devices/DistributedLoad"):
-            ph = _per_phase_load_values(dev)
-            rows.append({
-                "SectionID": get(s, "./SectionID"),
-                "FromNodeID": get(s, "./FromNodeID"),
-                "ToNodeID": get(s, "./ToNodeID"),
-                "DeviceNumber": get(dev, "./DeviceNumber"),
-                "ConnConfig": get(dev, "./ConnectionConfiguration"),
-                **ph
-            })
-    return pd.DataFrame(rows)
-
-def parse_caps(root):
-    rows = []
-    for s in all_elems(root, ".//Sections/Section"):
-        for dev in all_elems(s, "./Devices/ShuntCapacitor"):
-            rows.append({
-                "SectionID": get(s, "./SectionID"),
-                "FromNodeID": get(s, "./FromNodeID"),
-                "ToNodeID": get(s, "./ToNodeID"),
-                "DeviceNumber": get(dev, "./DeviceNumber"),
-                "ConnConfig": get(dev, "./ConnectionConfiguration"),
-                "KVAR_A": get(dev, "./FixedKVARA"),
-                "KVAR_B": get(dev, "./FixedKVARB"),
-                "KVAR_C": get(dev, "./FixedKVARC"),
-                "KVLN": get(dev, "./KVLN"),
-            })
-    return pd.DataFrame(rows)
-
-def parse_regs(root):
-    rows = []
-    for s in all_elems(root, ".//Sections/Section"):
-        for dev in all_elems(s, "./Devices/Regulator"):
-            rows.append({
-                "SectionID": get(s, "./SectionID"),
-                "FromNodeID": get(s, "./FromNodeID"),
-                "ToNodeID": get(s, "./ToNodeID"),
-                "DeviceNumber": get(dev, "./DeviceNumber"),
-                "ConnConfig": get(dev, "./ConnectionConfiguration"),
-                "TapA": get(dev, "./TapPositionA"),
-                "TapB": get(dev, "./TapPositionB"),
-                "TapC": get(dev, "./TapPositionC"),
-                "BandWidth": get(dev, "./BandWidth"),
-                "BoostPercent": get(dev, "./BoostPercent"),
-                "BuckPercent": get(dev, "./BuckPercent"),
-            })
-    return pd.DataFrame(rows)
-
-def parse_transformers(root):
-    rows = []
-    for s in all_elems(root, ".//Sections/Section"):
-        for dev in all_elems(s, "./Devices/Transformer"):
-            rows.append({
-                "SectionID": get(s, "./SectionID"),
-                "FromNodeID": get(s, "./FromNodeID"),
-                "ToNodeID": get(s, "./ToNodeID"),
-                "DeviceNumber": get(dev, "./DeviceNumber"),
-                "DeviceID": get(dev, "./DeviceID"),
-                "Connection": get(dev, "./TransformerConnection"),
-                "PhaseShift": get(dev, "./PhaseShift"),
-                "PrimaryTapPct": get(dev, "./PrimaryTapSettingPercent"),
-                "SecondaryTapPct": get(dev, "./SecondaryTapSettingPercent"),
-            })
-    return pd.DataFrame(rows)
-
-def parse_switches(root):
-    rows = []
-    for s in all_elems(root, ".//Sections/Section"):
-        for dev in all_elems(s, "./Devices/Switch"):
-            rows.append({
-                "SectionID": get(s, "./SectionID"),
-                "FromNodeID": get(s, "./FromNodeID"),
-                "ToNodeID": get(s, "./ToNodeID"),
-                "DeviceNumber": get(dev, "./DeviceNumber"),
-                "DeviceID": get(dev, "./DeviceID"),
-                "ClosedPhase": get(dev, "./ClosedPhase"),
-                "NormalStatus": get(dev, "./NormalStatus"),
-                "RemoteControlled": get(dev, "./RemoteControlled"),
-            })
-    return pd.DataFrame(rows)
-
-def parse_sources(root):
-    rows = []
-    for src in all_elems(root, ".//Sources/Source"):
-        sset = src.find("./SourceSettings")
-        eq = src.find(".//EquivalentSourceModels/EquivalentSourceModel/EquivalentSource")
-        rows.append({
-            "SourceNodeID": get(src, "./SourceNodeID"),
-            "SourceID": get(sset, "./SourceID") if sset is not None else "",
-            "DesiredKVLL": get(sset, "./DesiredVoltage"),
-            "KVLL": get(eq, "./KVLL") if eq is not None else "",
-            "PosSeqR": get(eq, "./PositiveSequenceResistance") if eq is not None else "",
-            "PosSeqX": get(eq, "./PositiveSequenceReactance") if eq is not None else "",
-            "ZeroSeqR": get(eq, "./ZeroSequenceResistance") if eq is not None else "",
-            "ZeroSeqX": get(eq, "./ZeroSequenceReactance") if eq is not None else "",
-        })
-    return pd.DataFrame(rows)
 
 def main():
-    in_path = Path(INPUT_SXST)
-    out_path = Path(OUTPUT_XLSX)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
+    # Hardcoded paths
+    input_path = INPUT_PATH.resolve()
+    output_path = OUTPUT_PATH.resolve()
 
-    tree = ET.parse(in_path)
-    root = tree.getroot()
+    if not input_path.exists():
+        print(f"Input not found: {input_path}")
+        return
 
-    dfs = {
-        "Nodes": parse_nodes(root),
-        "Sections": parse_sections(root),
-        "Lines": parse_lines(root),
-        "Loads": parse_spot_loads(root),
-        "DistLoads": parse_dist_loads(root),
-        "Caps": parse_caps(root),
-        "Regulators": parse_regs(root),
-        "Transformers": parse_transformers(root),
-        "Switches": parse_switches(root),
-        "Sources": parse_sources(root),
-    }
+    # Parse
+    rows_general = get_general(input_path)
+    df_bus = pd.DataFrame(extract_bus_data(input_path))
+    df_vs = pd.DataFrame(extract_voltage_source_data(input_path))
 
-    with pd.ExcelWriter(out_path, engine="openpyxl") as xl:
-        for name, df in dfs.items():
-            # Keep stable column order if possible
-            if not df.empty:
-                df.to_excel(xl, sheet_name=name, index=False)
-            else:
-                # write headers-only empty sheet to keep structure
-                pd.DataFrame(columns=[]).to_excel(xl, sheet_name=name, index=False)
+    # Print to terminal
+    print("=== General ===")
+    for row in rows_general:
+        if isinstance(row, (list, tuple)) and len(row) == 2:
+            field, value = row
+            print(f"{field:<24} {_fmt_num(value)}")
+        else:
+            print(f"(skipped row with {len(row) if hasattr(row, '__len__') else 'unknown'} elements): {row}")
 
-    print(f"✅ Wrote {out_path}")
+    print("\n=== Bus ===")
+    if df_bus.empty:
+        print("(no bus rows)")
+    else:
+        print(df_bus.to_string(index=False))
+
+    print("\n=== Voltage_Source ===")
+    if df_vs.empty:
+        print("(no voltage source rows)")
+    else:
+        print(df_vs.to_string(index=False))
+
+    # Write Excel
+    with pd.ExcelWriter(output_path, engine="xlsxwriter") as xw:
+        pd.DataFrame(rows_general, columns=["Field", "Value"]).to_excel(
+            xw, index=False, sheet_name="General"
+        )
+        (df_bus if not df_bus.empty else pd.DataFrame(
+            columns=["NodeID", "X", "Y", "BusWidth", "TagText"]
+        )).to_excel(xw, index=False, sheet_name="Bus")
+        (df_vs if not df_vs.empty else pd.DataFrame(
+            columns=[
+                "SourceNodeID",
+                "DeviceNumber",
+                "SourceID",
+                "DesiredVoltage_kVLL",
+                "EquivalentConfig",
+                "KVLL",
+                "OperatingVoltage1_kVLN",
+                "OperatingAngle1_deg",
+                "PosSeqR",
+                "PosSeqX",
+                "NegSeqR",
+                "NegSeqX",
+                "ZeroSeqR",
+                "ZeroSeqX",
+                "NominalCapacity1_MVA",
+                "NominalCapacity2_MVA",
+            ]
+        )).to_excel(xw, index=False, sheet_name="Voltage_Source")
+
+    print(f"\nWrote sheets to: {output_path}")
+
 
 if __name__ == "__main__":
     main()
