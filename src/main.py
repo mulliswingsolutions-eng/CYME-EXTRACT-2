@@ -4,13 +4,12 @@ main.py
 End-to-end runner: parse a CYME text export and write three sheets to an XLSX:
     - General
     - Bus
-    - Voltage_Source
+    - Voltage Source
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-import sys
 import pandas as pd
 
 # ===== USER-CONFIGURABLE PATHS =====
@@ -36,7 +35,6 @@ def _fmt_num(x):
 
 
 def main():
-    # Hardcoded paths
     input_path = INPUT_PATH.resolve()
     output_path = OUTPUT_PATH.resolve()
 
@@ -47,7 +45,7 @@ def main():
     # Parse
     rows_general = get_general(input_path)
     df_bus = pd.DataFrame(extract_bus_data(input_path))
-    df_vs = pd.DataFrame(extract_voltage_source_data(input_path))
+    df_vs = extract_voltage_source_data(input_path)  # already a DataFrame in template format
 
     # Print to terminal
     print("=== General ===")
@@ -60,15 +58,15 @@ def main():
     else:
         print(df_bus.to_string(index=False))
 
-    print("\n=== Voltage_Source ===")
+    print("\n=== Voltage Source ===")
     if df_vs.empty:
         print("(no voltage source rows)")
     else:
-        print(df_vs.to_string(index=False))
+        print(df_vs.to_string(index=False, header=False))
 
     # Write Excel
     with pd.ExcelWriter(output_path, engine="xlsxwriter") as xw:
-        # General sheet without headers
+        # General sheet (no headers)
         pd.DataFrame(rows_general).to_excel(
             xw, index=False, header=False, sheet_name="General"
         )
@@ -76,27 +74,10 @@ def main():
         (df_bus if not df_bus.empty else pd.DataFrame(
             columns=["NodeID", "X", "Y", "BusWidth", "TagText"]
         )).to_excel(xw, index=False, sheet_name="Bus")
-        # Voltage Source sheet
-        (df_vs if not df_vs.empty else pd.DataFrame(
-            columns=[
-                "SourceNodeID",
-                "DeviceNumber",
-                "SourceID",
-                "DesiredVoltage_kVLL",
-                "EquivalentConfig",
-                "KVLL",
-                "OperatingVoltage1_kVLN",
-                "OperatingAngle1_deg",
-                "PosSeqR",
-                "PosSeqX",
-                "NegSeqR",
-                "NegSeqX",
-                "ZeroSeqR",
-                "ZeroSeqX",
-                "NominalCapacity1_MVA",
-                "NominalCapacity2_MVA",
-            ]
-        )).to_excel(xw, index=False, sheet_name="Voltage_Source")
+        # Voltage Source sheet (already in correct template layout)
+        (df_vs if not df_vs.empty else pd.DataFrame()).to_excel(
+            xw, index=False, header=False, sheet_name="Voltage Source"
+        )
 
     print(f"\nWrote sheets to: {output_path}")
 
