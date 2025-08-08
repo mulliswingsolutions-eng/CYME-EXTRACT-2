@@ -1,1 +1,4 @@
 # Add required packages here
+pandas
+openpyxl
+lxml
