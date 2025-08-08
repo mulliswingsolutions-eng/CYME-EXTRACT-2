@@ -5,6 +5,12 @@ from typing import List, Tuple, Optional
 import re
 import xml.etree.ElementTree as ET
 
+# ================================
+# Editable constants
+EXCEL_FILE_VERSION = "v2.0"
+SYSTEM_NAME = "Distribution"
+# ================================
+
 GP_BLOCK_RE = re.compile(
     r"<GlobalParameters\b[^>]*>(.*?)</GlobalParameters>",
     re.DOTALL | re.IGNORECASE,
@@ -20,22 +26,30 @@ def _to_float(x: Optional[str]) -> Optional[float]:
 
 def get_general(file_path: str | Path) -> List[Tuple[str, Optional[float]]]:
     """
-    Return ONLY Frequency and BaseMVA from the single <GlobalParameters> block.
-    If the block or values are missing, return None for that value (no defaults here).
+    Return:
+    - Excel file version (hardcoded)
+    - Name (hardcoded)
+    - Frequency (from GlobalParameters)
+    - Power Base (MVA) (from GlobalParameters)
     """
     file_path = Path(file_path)
     text = file_path.read_text(encoding="utf-8", errors="ignore")
 
-    # Extract *only* the <GlobalParameters>...</GlobalParameters> chunk
+    # Extract <GlobalParameters>...</GlobalParameters>
     m = GP_BLOCK_RE.search(text)
     if not m:
-        return [("Frequency (Hz)", None), ("Power Base (MVA)", None)]
+        freq = None
+        base_mva = None
+    else:
+        gp_chunk = "<GlobalParameters>" + m.group(1) + "</GlobalParameters>"
+        gp = ET.fromstring(gp_chunk)
+        freq = _to_float(gp.findtext("Frequency"))
+        base_mva = _to_float(gp.findtext("BaseMVA"))
 
-    gp_chunk = "<GlobalParameters>" + m.group(1) + "</GlobalParameters>"
-
-    # Parse just that chunk
-    gp = ET.fromstring(gp_chunk)  # gp.tag == 'GlobalParameters'
-    freq = _to_float(gp.findtext("Frequency"))
-    base_mva = _to_float(gp.findtext("BaseMVA"))
-
-    return [("Frequency (Hz)", freq), ("Power Base (MVA)", base_mva)]
+    # Return data in desired order
+    return [
+        ("Excel file version", EXCEL_FILE_VERSION),
+        ("Name", SYSTEM_NAME),
+        ("Frequency (Hz)", freq),
+        ("Power Base (MVA)", base_mva)
+    ]

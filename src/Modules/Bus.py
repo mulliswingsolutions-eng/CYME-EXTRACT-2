@@ -4,113 +4,81 @@ Bus.py
 Bus extraction utilities for CYME text export (XML content).
 
 Public API:
-    extract_bus_data(path: str | Path) -> pandas.DataFrame
+    extract_bus_data(path: str | Path) -> list[dict]
 
 Columns returned (where available):
-    - NodeID
-    - X
-    - Y
-    - BusWidth
-    - TagText
+    - Bus
+    - Base Voltage (V)
+    - Initial Vmag
+    - Unit
+    - Angle
+    - Type
 """
 
-from __future__ import annotations
-
-from pathlib import Path
 import xml.etree.ElementTree as ET
-from typing import Optional, List, Dict, Any
-
-import pandas as pd
 
 
-def _first_text(elem: Optional[ET.Element], default: str = "") -> str:
-    if elem is None:
-        return default
-    return (elem.text or "").strip()
-
-
-def _float_or_none(s: str) -> Optional[float]:
-    try:
-        return float(s)
-    except Exception:
-        return None
-
-
-def _get_network(root: ET.Element) -> Optional[ET.Element]:
-    nets = root.find("Networks")
-    if nets is None:
-        return None
-    return nets.find("Network")
-
-
-def extract_bus_data(path: str | Path) -> pd.DataFrame:
-    """
-    Parse bus / node information from a CYME text export.
-
-    Parameters
-    ----------
-    path : str | Path
-
-    Returns
-    -------
-    pandas.DataFrame
-        One row per Node (i.e., "bus").
-    """
-    p = Path(path)
-    tree = ET.parse(p)
+def extract_bus_data(filepath):
+    tree = ET.parse(filepath)
     root = tree.getroot()
 
-    network = _get_network(root)
-    if network is None:
-        return pd.DataFrame(columns=["NodeID", "X", "Y", "BusWidth", "TagText"])
+    # --- Source info (this is the slack bus) ---
+    source_node = (root.findtext('.//Sources/Source/SourceNodeID') or '').strip()
 
-    nodes = network.find("Nodes")
-    if nodes is None:
-        return pd.DataFrame(columns=["NodeID", "X", "Y", "BusWidth", "TagText"])
+    eq = root.find('.//Sources/Source/EquivalentSourceModels/EquivalentSourceModel/EquivalentSource')
+    if eq is None:
+        raise ValueError("Could not find EquivalentSource block")
 
-    rows: List[Dict[str, Any]] = []
+    # per-phase LN kV and angles from the source (OperatingVoltage is LN in kV in this file)
+    phase_v_kv = {
+        'A': float(eq.findtext('OperatingVoltage1', '0')),
+        'B': float(eq.findtext('OperatingVoltage2', '0')),
+        'C': float(eq.findtext('OperatingVoltage3', '0')),
+    }
+    phase_ang = {
+        'A': float(eq.findtext('OperatingAngle1', '0')),
+        'B': float(eq.findtext('OperatingAngle2', '0')),
+        'C': float(eq.findtext('OperatingAngle3', '0')),
+    }
 
-    for node in nodes.findall("Node"):
-        node_id = _first_text(node.find("NodeID"))
+    # --- Build node -> phases map by scanning all sections ---
+    node_phases = {}  # {node_id: set('A','B','C')}
 
-        # Coordinates live under Connectors/Point
-        x = y = None
-        connectors = node.find("Connectors")
-        if connectors is not None:
-            pt = connectors.find("Point")
-            if pt is not None:
-                x = _float_or_none(_first_text(pt.find("X")))
-                y = _float_or_none(_first_text(pt.find("Y")))
+    def add_phases(node_id, phasestr):
+        node_id = (node_id or '').strip()
+        if not node_id:
+            return
+        up = node_id.upper()
+        if up.startswith('LOAD') or 'CAP' in up:
+            return
+        s = node_phases.setdefault(node_id, set())
+        for ch in phasestr:
+            if ch in ('A', 'B', 'C'):
+                s.add(ch)
 
-        # If a BusDisplay is present, width can be helpful for visuals
-        bus_width = None
-        bus_disp = node.find("BusDisplay")
-        if bus_disp is not None:
-            bus_width = _float_or_none(_first_text(bus_disp.find("Width")))
+    for sec in root.findall('.//Sections/Section'):
+        phasestr = (sec.findtext('Phase') or '').strip()
+        if not phasestr:
+            continue
+        add_phases(sec.findtext('FromNodeID'), phasestr)
+        add_phases(sec.findtext('ToNodeID'), phasestr)
 
-        # Optional tag text (often contains voltage placeholders)
-        tag_text = ""
-        tag = node.find("Tag")
-        if tag is not None:
-            tag_text = _first_text(tag.find("Text"))
+    # Ensure the source node has all three phases if its EquivalentSource is three-phase
+    if source_node:
+        node_phases.setdefault(source_node, set()).update(['A', 'B', 'C'])
 
-        rows.append(
-            {
-                "NodeID": node_id,
-                "X": x,
-                "Y": y,
-                "BusWidth": bus_width,
-                "TagText": tag_text,
-            }
-        )
+    # --- Emit rows per node-phase ---
+    entries = []
+    for node_id, phases in sorted(node_phases.items()):
+        for ph in sorted(phases):
+            v_ln_volts = phase_v_kv[ph] * 1000.0
+            entries.append({
+                "Bus": f"{node_id}_{ph.lower()}",
+                "Base Voltage (V)": v_ln_volts,
+                "Initial Vmag": v_ln_volts,  # initial = source LN mag here
+                "Unit": "V",
+                "Angle": phase_ang[ph],
+                "Type": "Slack" if node_id == source_node else "PQ",
+            })
 
-    # Sort by NodeID when possible (numeric IDs numerically, otherwise lexicographically)
-    def _sort_key(v: str):
-        try:
-            return (0, int(v))
-        except Exception:
-            return (1, v)
-
-    rows.sort(key=lambda r: _sort_key(r["NodeID"]))
-
-    return pd.DataFrame(rows, columns=["NodeID", "X", "Y", "BusWidth", "TagText"])
+    return entries

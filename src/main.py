@@ -11,21 +11,11 @@ from __future__ import annotations
 
 from pathlib import Path
 import sys
-from pathlib import Path
 import pandas as pd
-# Utility function to ensure output path
-def _ensure_output_path(in_path: Path, out_arg: str | None) -> Path:
-    if out_arg:
-        return Path(out_arg).resolve()
-    return in_path.with_suffix(".xlsx")
 
 # ===== USER-CONFIGURABLE PATHS =====
-INPUT_PATH = Path(
-    r"\Examples\Example-13bus-modified.txt"
-)
-OUTPUT_PATH = Path(
-    r"\Outputs\CYME_Extract_13Bus.xlsx"
-)
+INPUT_PATH = Path(__file__).parent.parent / "Examples" / "Example-13bus-modified.txt"
+OUTPUT_PATH = Path(__file__).parent.parent / "Outputs" / "CYME_Extract_13Bus.xlsx"
 # ===================================
 
 # Local imports
@@ -61,12 +51,8 @@ def main():
 
     # Print to terminal
     print("=== General ===")
-    for row in rows_general:
-        if isinstance(row, (list, tuple)) and len(row) == 2:
-            field, value = row
-            print(f"{field:<24} {_fmt_num(value)}")
-        else:
-            print(f"(skipped row with {len(row) if hasattr(row, '__len__') else 'unknown'} elements): {row}")
+    for field, value in rows_general:
+        print(f"{field:<24} {_fmt_num(value)}")
 
     print("\n=== Bus ===")
     if df_bus.empty:
@@ -82,12 +68,15 @@ def main():
 
     # Write Excel
     with pd.ExcelWriter(output_path, engine="xlsxwriter") as xw:
-        pd.DataFrame(rows_general, columns=["Field", "Value"]).to_excel(
-            xw, index=False, sheet_name="General"
+        # General sheet without headers
+        pd.DataFrame(rows_general).to_excel(
+            xw, index=False, header=False, sheet_name="General"
         )
+        # Bus sheet
         (df_bus if not df_bus.empty else pd.DataFrame(
             columns=["NodeID", "X", "Y", "BusWidth", "TagText"]
         )).to_excel(xw, index=False, sheet_name="Bus")
+        # Voltage Source sheet
         (df_vs if not df_vs.empty else pd.DataFrame(
             columns=[
                 "SourceNodeID",
