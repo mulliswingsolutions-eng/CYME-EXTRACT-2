@@ -317,26 +317,26 @@ def write_load_sheet(xw, input_path: Path) -> None:
     ws.merge_range(9, 0, 9, 7, "One empty row between End of each block and the next block is mandatory; otherwise, empty rows are NOT allowed", notes_txt)
 
     # -------- Block 1: PosSeq Z (empty) --------
-    ws.merge_range(b1_t, 0, b1_t, 3, "Positive-Sequence Constant Impedance Load", bold)
-    ws.write_url(b1_t, 4, "internal:'Load'!A1", link_fmt, "Go to Type List")
+    ws.merge_range(b1_t, 0, b1_t, 1, "Positive-Sequence Constant Impedance Load", bold)
+    ws.write_url(b1_t, 2, "internal:'Load'!A1", link_fmt, "Go to Type List")
     ws.write_row(b1_h, 0, ["ID", "Status", "Bus", "P (MW)", "Q (MVAr)"], th)
-    ws.merge_range(b1_e, 0, b1_e, 3, "End of Positive-Sequence Constant Impedance Load")
+    ws.merge_range(b1_e, 0, b1_e, 2, "End of Positive-Sequence Constant Impedance Load")
 
     # -------- Block 2: PosSeq P (empty) --------
-    ws.merge_range(b2_t, 0, b2_t, 3, "Positive-Sequence Constant Power Load", bold)
-    ws.write_url(b2_t, 4, "internal:'Load'!A1", link_fmt, "Go to Type List")
+    ws.merge_range(b2_t, 0, b2_t, 1, "Positive-Sequence Constant Power Load", bold)
+    ws.write_url(b2_t, 2, "internal:'Load'!A1", link_fmt, "Go to Type List")
     ws.write_row(b2_h, 0, ["ID", "Status", "Bus", "P (MW)", "Q (MVAr)"], th)
-    ws.merge_range(b2_e, 0, b2_e, 3, "End of Positive-Sequence Constant Power Load")
+    ws.merge_range(b2_e, 0, b2_e, 2, "End of Positive-Sequence Constant Power Load")
 
     # -------- Block 3: PosSeq I (empty) --------
-    ws.merge_range(b3_t, 0, b3_t, 3, "Positive-Sequence Constant Current Load", bold)
-    ws.write_url(b3_t, 4, "internal:'Load'!A1", link_fmt, "Go to Type List")
+    ws.merge_range(b3_t, 0, b3_t, 1, "Positive-Sequence Constant Current Load", bold)
+    ws.write_url(b3_t, 2, "internal:'Load'!A1", link_fmt, "Go to Type List")
     ws.write_row(b3_h, 0, ["ID", "Status", "Bus", "P (MW)", "Q (MVAr)"], th)
-    ws.merge_range(b3_e, 0, b3_e, 3, "End of Positive-Sequence Constant Current Load")
+    ws.merge_range(b3_e, 0, b3_e, 2, "End of Positive-Sequence Constant Current Load")
 
     # -------- Block 4: Single-Phase ZIP (parsed) --------
-    ws.merge_range(b4_t, 0, b4_t, 3, "Single-Phase ZIP Load", bold)
-    ws.write_url(b4_t, 4, "internal:'Load'!A1", link_fmt, "Go to Type List")
+    ws.merge_range(b4_t, 0, b4_t, 1, "Single-Phase ZIP Load", bold)
+    ws.write_url(b4_t, 2, "internal:'Load'!A1", link_fmt, "Go to Type List")
     ws.write_row(
         b4_h, 0,
         ["ID", "Status", "V (kV)", "Bandwidth (pu)", "Conn. type", "K_z", "K_i", "K_p",
@@ -363,11 +363,11 @@ def write_load_sheet(xw, input_path: Path) -> None:
         ws.write_number(rcur, 10, row["P1"], num0)
         ws.write_number(rcur, 11, row["Q1"], num0)
         rcur += 1
-    ws.merge_range(b4_e, 0, b4_e, 3, "End of SinglePhase ZIP Load")
+    ws.merge_range(b4_e, 0, b4_e, 1, "End of SinglePhase ZIP Load")
 
     # -------- Block 5: Two-Phase ZIP (parsed) --------
-    ws.merge_range(b5_t, 0, b5_t, 3, "Two-Phase ZIP Load", bold)
-    ws.write_url(b5_t, 4, "internal:'Load'!A1", link_fmt, "Go to Type List")
+    ws.merge_range(b5_t, 0, b5_t, 1, "Two-Phase ZIP Load", bold)
+    ws.write_url(b5_t, 2, "internal:'Load'!A1", link_fmt, "Go to Type List")
     ws.write_row(
         b5_h, 0,
         ["ID", "Status", "V (kV)", "Bandwidth (pu)", "Conn. type", "K_z", "K_i", "K_p",
@@ -392,11 +392,11 @@ def write_load_sheet(xw, input_path: Path) -> None:
         ws.write_number(rcur,11, row["P1"], num0); ws.write_number(rcur,12, row["Q1"], num0)
         ws.write_number(rcur,13, row["P2"], num0); ws.write_number(rcur,14, row["Q2"], num0)
         rcur += 1
-    ws.merge_range(b5_e, 0, b5_e, 3, "End of TwoPhase ZIP Load")
+    ws.merge_range(b5_e, 0, b5_e, 1, "End of TwoPhase ZIP Load")
 
     # -------- Block 6: Three-Phase ZIP (parsed) --------
-    ws.merge_range(b6_t, 0, b6_t, 3, "Three-Phase ZIP Load", bold)
-    ws.write_url(b6_t, 4, "internal:'Load'!A1", link_fmt, "Go to Type List")
+    ws.merge_range(b6_t, 0, b6_t, 1, "Three-Phase ZIP Load", bold)
+    ws.write_url(b6_t, 2, "internal:'Load'!A1", link_fmt, "Go to Type List")
     ws.write_row(
         b6_h, 0,
         ["ID", "Status", "V (kV)", "Bandwidth (pu)", "Conn. type", "K_z", "K_i", "K_p",
@@ -422,4 +422,4 @@ def write_load_sheet(xw, input_path: Path) -> None:
         ws.write_number(rcur,14, row["P_B"], num0); ws.write_number(rcur,15, row["Q_B"], num0)
         ws.write_number(rcur,16, row["P_C"], num0); ws.write_number(rcur,17, row["Q_C"], num0)
         rcur += 1
-    ws.merge_range(b6_e, 0, b6_e, 3, "End of Three-Phase ZIP Load")
+    ws.merge_range(b6_e, 0, b6_e, 1, "End of Three-Phase ZIP Load")
