@@ -1,85 +1,47 @@
-"""
-main.py
--------
-End-to-end runner: parse a CYME text export and write three sheets to an XLSX:
-    - General
-    - Bus
-    - Voltage Source
-"""
-
+# src/main.py
 from __future__ import annotations
-
 from pathlib import Path
 import pandas as pd
 
-# ===== USER-CONFIGURABLE PATHS =====
-INPUT_PATH = Path(__file__).parent.parent / "Examples" / "Example-13bus-modified.txt"
-OUTPUT_PATH = Path(__file__).parent.parent / "Outputs" / "CYME_Extract_13Bus.xlsx"
-# ===================================
-
-# Local imports
+# Local imports (same folder)
 from Modules.General import get_general
 from Modules.Bus import extract_bus_data
-from Modules.Voltage_Source import extract_voltage_source_data
+from Modules.Voltage_Source import write_voltage_source_sheet
+from Modules.Load import write_load_sheet
 
-
-def _fmt_num(x):
-    """Pretty number formatter: 60 -> '60', 60.5 -> '60.5'."""
-    try:
-        f = float(x)
-    except Exception:
-        return x
-    if f.is_integer():
-        return str(int(f))
-    return str(f)
+# ===== Paths (adjust as needed) =====
+INPUT_PATH = Path(__file__).parent.parent / "Examples/Example-13bus-modified.txt"
+OUTPUT_PATH = Path(__file__).parent.parent / "Outputs/CYME_Extract_13Bus.xlsx"
 
 
 def main():
-    input_path = INPUT_PATH.resolve()
-    output_path = OUTPUT_PATH.resolve()
+    in_path = INPUT_PATH.resolve()
+    out_path = OUTPUT_PATH.resolve()
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    if not in_path.exists():
+        raise FileNotFoundError(f"Input not found: {in_path}")
 
-    if not input_path.exists():
-        print(f"Input not found: {input_path}")
-        return
+    # Just to keep the other sheets working the same way:
+    bus_rows = extract_bus_data(in_path)
+    df_bus = pd.DataFrame(bus_rows)
+    general_rows = get_general(in_path)
 
-    # Parse
-    rows_general = get_general(input_path)
-    df_bus = pd.DataFrame(extract_bus_data(input_path))
-    df_vs = extract_voltage_source_data(input_path)  # already a DataFrame in template format
+    with pd.ExcelWriter(out_path, engine="xlsxwriter") as xw:
+        # General
+        pd.DataFrame(general_rows).to_excel(xw, sheet_name="General", index=False, header=False)
 
-    # Print to terminal
-    print("=== General ===")
-    for field, value in rows_general:
-        print(f"{field:<24} {_fmt_num(value)}")
+        # Bus
+        if df_bus.empty:
+            df_bus = pd.DataFrame(columns=["Bus", "Base Voltage (V)", "Initial Vmag", "Unit", "Angle", "Type"])
+        df_bus.to_excel(xw, sheet_name="Bus", index=False)
 
-    print("\n=== Bus ===")
-    if df_bus.empty:
-        print("(no bus rows)")
-    else:
-        print(df_bus.to_string(index=False))
+        # Voltage Source
+        write_voltage_source_sheet(xw, in_path)
 
-    print("\n=== Voltage Source ===")
-    if df_vs.empty:
-        print("(no voltage source rows)")
-    else:
-        print(df_vs.to_string(index=False, header=False))
+        # Load
+        write_load_sheet(xw, in_path)
 
-    # Write Excel
-    with pd.ExcelWriter(output_path, engine="xlsxwriter") as xw:
-        # General sheet (no headers)
-        pd.DataFrame(rows_general).to_excel(
-            xw, index=False, header=False, sheet_name="General"
-        )
-        # Bus sheet
-        (df_bus if not df_bus.empty else pd.DataFrame(
-            columns=["NodeID", "X", "Y", "BusWidth", "TagText"]
-        )).to_excel(xw, index=False, sheet_name="Bus")
-        # Voltage Source sheet (already in correct template layout)
-        (df_vs if not df_vs.empty else pd.DataFrame()).to_excel(
-            xw, index=False, header=False, sheet_name="Voltage Source"
-        )
-
-    print(f"\nWrote sheets to: {output_path}")
+    print(f"Wrote: {out_path}")
 
 
 if __name__ == "__main__":
