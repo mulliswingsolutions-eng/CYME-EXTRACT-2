@@ -251,7 +251,7 @@ def write_line_sheet(xw, input_path: Path) -> None:
     ws.write_url(2, 0, f"internal:'Line'!A{b2_h+1}:H{b2_e+1}", link_fmt, "SinglePhaseLine")
     ws.write_url(3, 0, f"internal:'Line'!A{b3_h+1}:P{b3_e+1}", link_fmt, "TwoPhaseLine")
     ws.write_url(4, 0, f"internal:'Line'!A{b4_h+1}:AA{max(b4_h+1,b4_e+1)}", link_fmt, "ThreePhaseLineFullData")
-    ws.write_url(5, 0, f"internal:'Line'!A{b5_h+1}:N{b5_e+1}", link_fmt, "ThreePhaseLineSequentialData")
+    ws.write_url(5, 0, f"internal:'Line'!A{b5_h+1}:O{b5_e+1}", link_fmt, "ThreePhaseLineSequentialData")
 
     # Notes band (rows 8–10), merged A:H
     ws.merge_range(7, 0, 7, 7, "Important notes:", notes_hdr)

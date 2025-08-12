@@ -11,7 +11,7 @@ EXCEL_FILE_VERSION = "v2.0"
 SYSTEM_NAME = "Distribution"
 # ================================
 
-GP_BLOCK_RE = re.compile(
+_GP_BLOCK_RE = re.compile(
     r"<GlobalParameters\b[^>]*>(.*?)</GlobalParameters>",
     re.DOTALL | re.IGNORECASE,
 )
@@ -24,19 +24,14 @@ def _to_float(x: Optional[str]) -> Optional[float]:
     except Exception:
         return None
 
-def get_general(file_path: str | Path) -> List[Tuple[str, Optional[float]]]:
+def _parse_general(file_path: Path) -> list[tuple[str, Optional[float] | str]]:
     """
-    Return:
-    - Excel file version (hardcoded)
-    - Name (hardcoded)
-    - Frequency (from GlobalParameters)
-    - Power Base (MVA) (from GlobalParameters)
+    Parse <GlobalParameters> from the CYME text and return the 2-column rows
+    we want to write on the 'General' sheet.
     """
-    file_path = Path(file_path)
-    text = file_path.read_text(encoding="utf-8", errors="ignore")
+    text = Path(file_path).read_text(encoding="utf-8", errors="ignore")
 
-    # Extract <GlobalParameters>...</GlobalParameters>
-    m = GP_BLOCK_RE.search(text)
+    m = _GP_BLOCK_RE.search(text)
     if not m:
         freq = None
         base_mva = None
@@ -46,10 +41,48 @@ def get_general(file_path: str | Path) -> List[Tuple[str, Optional[float]]]:
         freq = _to_float(gp.findtext("Frequency"))
         base_mva = _to_float(gp.findtext("BaseMVA"))
 
-    # Return data in desired order
     return [
         ("Excel file version", EXCEL_FILE_VERSION),
         ("Name", SYSTEM_NAME),
         ("Frequency (Hz)", freq),
-        ("Power Base (MVA)", base_mva)
+        ("Power Base (MVA)", base_mva),
     ]
+
+# --- Backward-compat helper (keeps your old call site working) ---
+def get_general(file_path: str | Path) -> List[Tuple[str, Optional[float] | str]]:
+    return _parse_general(Path(file_path))
+
+# --- New unified API, same as the other modules ---
+def write_general_sheet(xw, input_path: Path) -> None:
+    """
+    Create the 'General' sheet using the same xlsxwriter pattern as other pages.
+    """
+    rows = _parse_general(Path(input_path))
+
+    wb = xw.book
+    ws = wb.add_worksheet("General")
+    # (Optional) store handle for consistency with your other modules
+    try:
+        xw.sheets["General"] = ws  # pandas.ExcelWriter keeps this dict
+    except Exception:
+        pass
+
+    # Formats
+    key_fmt = wb.add_format({"bold": True})
+    num_fmt = wb.add_format({"num_format": "0.00"})
+
+    # Column widths
+    ws.set_column(0, 0, 24)  # labels
+    ws.set_column(1, 1, 18)  # values
+
+    # Write rows
+    r = 0
+    for label, value in rows:
+        ws.write(r, 0, label, key_fmt)
+        if isinstance(value, (int, float)) and value is not None:
+            ws.write_number(r, 1, float(value), num_fmt)
+        elif value is None:
+            ws.write(r, 1, "")
+        else:
+            ws.write(r, 1, str(value))
+        r += 1
