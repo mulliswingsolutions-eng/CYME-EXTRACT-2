@@ -6,17 +6,17 @@ import re
 import xml.etree.ElementTree as ET
 from typing import Dict, List, Tuple, Optional
 
-
 # ---------- constants / small helpers ----------
 MI_PER_M = 0.000621371192
 MI_PER_KM = 0.621371192  # used for ohm/km → ohm/mile, uS/km → uS/mile
 PHASE_SUFFIX = {"A": "_a", "B": "_b", "C": "_c"}
 
-def _float(x: Optional[str], default: float = 0.0) -> float:
+def _f(s: Optional[str]) -> float:
+    """Safe float: XML text -> float, never None."""
     try:
-        return float(x)
+        return float(s) if s is not None and s != "" else 0.0
     except Exception:
-        return default
+        return 0.0
 
 
 # ---------- read line databases (per-length impedances) ----------
@@ -43,8 +43,7 @@ def _read_line_db_map(root: ET.Element) -> Dict[str, Dict[str, float]]:
             "MutualShuntSusceptanceAB","MutualShuntSusceptanceBC","MutualShuntSusceptanceCA",
         ]:
             t = dbnode.findtext(k)
-            if t is not None:
-                vals[k] = _float(t)
+            vals[k] = _f(t)  # always a float
         if vals:
             db[eid] = vals
     return db
@@ -74,7 +73,7 @@ def _iter_lines(root: ET.Element):
                 "id": f"LN_{from_bus}_{to_bus}",
                 "from": from_bus, "to": to_bus,
                 "phase": phase or ("ABC" if olu.findtext("Phase") is None else phase),
-                "length_m": _float(olu.findtext("Length")),
+                "length_m": _f(olu.findtext("Length")),
                 "line_id": (olu.findtext("LineID") or "").strip(),
             }
             continue
@@ -87,7 +86,7 @@ def _iter_lines(root: ET.Element):
                 "id": f"LN_{from_bus}_{to_bus}",
                 "from": from_bus, "to": to_bus,
                 "phase": phase if phase else "ABC",
-                "length_m": _float(obp.findtext("Length")),
+                "length_m": _f(obp.findtext("Length")),
                 "line_id": "",  # we'll choose an appropriate DB family
             }
 
@@ -151,7 +150,7 @@ def write_line_sheet(xw, input_path: Path) -> None:
     for item in _iter_lines(root):
         phase = item["phase"]
         from_bus, to_bus = item["from"], item["to"]
-        length_mi = item["length_m"] * MI_PER_M if item["length_m"] else None
+        length_mi = item["length_m"] * MI_PER_M  # item["length_m"] is always float
         status = 1  # Sections we collect are connected in the file
 
         # Choose a DB
