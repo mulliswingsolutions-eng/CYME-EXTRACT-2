@@ -1,7 +1,7 @@
 # Modules/Bus.py
 from __future__ import annotations
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List
 import xml.etree.ElementTree as ET
 
 PHASES = ("A", "B", "C")
@@ -14,7 +14,6 @@ def _parse_bus_rows(input_path: Path) -> List[Dict]:
     Columns:
       Bus | Base Voltage (V) | Initial Vmag | Unit | Angle | Type
     """
-    # Parse the XML text (CYME export)
     root = ET.fromstring(Path(input_path).read_text(encoding="utf-8", errors="ignore"))
 
     # --- Slack/source info ---
@@ -22,7 +21,6 @@ def _parse_bus_rows(input_path: Path) -> List[Dict]:
 
     eq = root.find(".//Sources/Source/EquivalentSourceModels/EquivalentSourceModel/EquivalentSource")
     if eq is None:
-        # keep robust: no rows if no source found
         return []
 
     # LN kV and angles from the source
@@ -37,30 +35,40 @@ def _parse_bus_rows(input_path: Path) -> List[Dict]:
         "C": float(eq.findtext("OperatingAngle3", "0")),
     }
 
-    # --- Build node -> phases map by scanning all sections ---
+    # --- Build node -> phases map while avoiding device terminals ---
     node_phases: Dict[str, set] = {}
 
-    def add_phases(node_id: str | None, phase_str: str | None) -> None:
-        node_id = (node_id or "").strip()
-        if not node_id:
+    def add(node_id: str | None, phase_str: str) -> None:
+        nid = (node_id or "").strip()
+        if not nid:
             return
-        up = node_id.upper()
-        # Exclude device pseudo-nodes (LOAD*, *CAP*)
-        if up.startswith("LOAD") or "CAP" in up:
-            return
-        s = node_phases.setdefault(node_id, set())
-        for ch in (phase_str or ""):
+        s = node_phases.setdefault(nid, set())
+        for ch in phase_str:
             if ch in PHASES:
                 s.add(ch)
 
     for sec in root.findall(".//Sections/Section"):
-        phasestr = (sec.findtext("Phase") or "").strip()
-        if not phasestr:
-            continue
-        add_phases(sec.findtext("FromNodeID"), phasestr)
-        add_phases(sec.findtext("ToNodeID"), phasestr)
+        ph = (sec.findtext("Phase") or "ABC").strip().upper()
 
-    # Ensure the slack/source node has all three phases (typical 3φ source)
+        has_line   = sec.find(".//Devices/OverheadLineUnbalanced") is not None or \
+                     sec.find(".//Devices/OverheadByPhase") is not None
+        has_xfmr   = sec.find(".//Devices/Transformer") is not None
+        has_switch = sec.find(".//Devices/Switch") is not None
+        has_spot   = sec.find(".//Devices/SpotLoad") is not None
+        has_shunt  = sec.find(".//Devices/ShuntCapacitor") is not None or \
+                     sec.find(".//Devices/ShuntReactor") is not None
+
+        f = sec.findtext("FromNodeID")
+        t = sec.findtext("ToNodeID")
+
+        if has_line or has_xfmr or has_switch:
+            # Network branches use both endpoints as buses
+            add(f, ph)
+            add(t, ph)
+        elif has_spot or has_shunt:
+            # Device sections: only the FromNodeID is a real bus
+            add(f, ph)
+
     if source_node:
         node_phases.setdefault(source_node, set()).update(PHASES)
 
@@ -69,61 +77,43 @@ def _parse_bus_rows(input_path: Path) -> List[Dict]:
         return PHASES.index(p)
 
     rows: List[Dict] = []
-    for node_id in sorted(node_phases.keys()):
-        for ph in sorted(node_phases[node_id], key=phase_key):
-            v_ln_volts = phase_v_kv[ph] * 1000.0
-            rows.append(
-                {
-                    "Bus": f"{node_id}_{ph.lower()}",
-                    "Base Voltage (V)": v_ln_volts,
-                    "Initial Vmag": v_ln_volts,  # use source LN magnitude as initial
-                    "Unit": "V",
-                    "Angle": phase_ang[ph],
-                    "Type": "Slack" if node_id == source_node else "PQ",
-                }
-            )
-
+    for node in sorted(node_phases):
+        for ph in sorted(node_phases[node], key=phase_key):
+            v_ln = phase_v_kv[ph] * 1000.0
+            rows.append({
+                "Bus": f"{node}_{ph.lower()}",
+                "Base Voltage (V)": v_ln,
+                "Initial Vmag": v_ln,
+                "Unit": "V",
+                "Angle": phase_ang[ph],
+                "Type": "Slack" if node == source_node else "PQ",
+            })
     return rows
 
 
-# --- Backward compatibility (original API) ---
+# Backward-compat API
 def extract_bus_data(filepath: str | Path) -> List[Dict]:
     return _parse_bus_rows(Path(filepath))
 
 
-# --- Unified writer API (matches other modules) ---
+# Unified writer API
 def write_bus_sheet(xw, input_path: Path) -> None:
-    """
-    Create the 'Bus' sheet using xlsxwriter (same pattern as other pages).
-    """
     rows = _parse_bus_rows(Path(input_path))
 
     wb = xw.book
     ws = wb.add_worksheet("Bus")
-    # expose for consistency if you keep a sheets dict on the writer
-    try:
-        xw.sheets["Bus"] = ws
-    except Exception:
-        pass
+    xw.sheets["Bus"] = ws
 
-    # Formats
     hdr = wb.add_format({"bold": True})
     num0 = wb.add_format({"num_format": "0"})
     num2 = wb.add_format({"num_format": "0.00"})
 
-    # Column widths
-    ws.set_column(0, 0, 18)  # Bus
-    ws.set_column(1, 1, 18)  # Base Voltage (V)
-    ws.set_column(2, 2, 16)  # Initial Vmag
-    ws.set_column(3, 3, 8)   # Unit
-    ws.set_column(4, 4, 10)  # Angle
-    ws.set_column(5, 5, 10)  # Type
+    ws.set_column(0, 0, 18)
+    ws.set_column(1, 2, 18)
+    ws.set_column(3, 3, 8)
+    ws.set_column(4, 5, 10)
 
-    # Header
-    headers = ["Bus", "Base Voltage (V)", "Initial Vmag", "Unit", "Angle", "Type"]
-    ws.write_row(0, 0, headers, hdr)
-
-    # Data
+    ws.write_row(0, 0, ["Bus", "Base Voltage (V)", "Initial Vmag", "Unit", "Angle", "Type"], hdr)
     r = 1
     for row in rows:
         ws.write(r, 0, row["Bus"])

@@ -1,9 +1,11 @@
 # Modules/Load.py
 from __future__ import annotations
 from pathlib import Path
+import math
 import re
 import xml.etree.ElementTree as ET
-from typing import Dict, List, Tuple, Any
+from collections import deque
+from typing import Dict, List, Tuple, Any, Set
 
 # -----------------------
 # Constants
@@ -13,103 +15,120 @@ PHASE_SUFFIX = {"A": "_a", "B": "_b", "C": "_c"}
 
 
 # =======================
-# XML helpers
+# Voltage map (KVLL) builder
 # =======================
-def _digits(s: str) -> str:
-    return "".join(ch for ch in (s or "") if ch.isdigit())
-
-
-def _get_default_kvll(root: ET.Element) -> float:
-    """
-    Read feeder line-to-line base (kV) from the Equivalent Source KVLL.
-    """
+def _get_source_kvll(root: ET.Element) -> float:
     eq = root.find(".//Sources/Source/EquivalentSourceModels/EquivalentSourceModel/EquivalentSource")
     if eq is not None:
         try:
             return float(eq.findtext("KVLL", "0") or "0")
         except Exception:
             pass
-    # Fallback if needed (shouldn't happen on 13-bus)
-    return 0
+    return 0.0
 
 
-def _transformer_db_kvll(root: ET.Element) -> Dict[str, float]:
-    """
-    Map TransformerDB DeviceID -> SecondaryVoltage (kV LL).
-    """
-    out: Dict[str, float] = {}
+def _read_transformer_db(root: ET.Element) -> Dict[str, Dict[str, float]]:
+    out: Dict[str, Dict[str, float]] = {}
     for tdb in root.findall(".//TransformerDB"):
-        dev = (tdb.findtext("EquipmentID") or "").strip()
-        if not dev:
+        eid = (tdb.findtext("EquipmentID") or "").strip()
+        if not eid:
             continue
-        try:
-            sec = float(tdb.findtext("SecondaryVoltage", "") or "nan")
-        except Exception:
-            sec = float("nan")
-        if sec == sec:  # not NaN
-            out[dev] = sec
+        def f(name: str) -> float:
+            v = tdb.findtext(name)
+            try:
+                return float(v) if v is not None and v != "" else 0.0
+            except Exception:
+                return 0.0
+        out[eid] = {
+            "kvp": f("PrimaryVoltage") or f("PrimaryKV"),
+            "kvs": f("SecondaryVoltage") or f("SecondaryKV"),
+        }
     return out
 
 
-def _secondary_bus_by_transformer(root: ET.Element) -> Dict[str, str]:
+def _build_voltage_map(txt_path: Path) -> Dict[str, float]:
     """
-    Map Transformer 'DeviceID' used in sections -> secondary bus ID.
-
-    We consider the node opposite to NormalFeedingNodeID as the secondary.
-    (If missing, we assume ToNodeID is secondary.)
-    """
-    result: Dict[str, str] = {}
-    for sec in root.findall(".//Section"):
-        xf = sec.find(".//Transformer")
-        if xf is None:
-            continue
-        dev = (xf.findtext("DeviceID") or "").strip()
-        if not dev:
-            continue
-
-        from_node = (sec.findtext("FromNodeID") or "").strip()
-        to_node = (sec.findtext("ToNodeID") or "").strip()
-        normal_feed = (xf.findtext("NormalFeedingNodeID") or "").strip()
-
-        if normal_feed and normal_feed == from_node and to_node:
-            secondary = to_node
-        elif normal_feed and normal_feed == to_node and from_node:
-            secondary = from_node
-        else:
-            # best-effort fallback
-            secondary = to_node or from_node
-
-        if dev and secondary:
-            result[dev] = secondary
-    return result
-
-
-def _kvll_map_for_buses(txt_path: Path) -> Dict[str, float]:
-    """
-    Build bus -> kVLL map:
-      - default from equivalent source KVLL (4.16 kV here)
-      - overrides for transformer secondary buses from TransformerDB.SecondaryVoltage
-        using the transformer sections to locate the secondary bus.
+    Assign KVLL to buses by:
+      - seeding the source node with KVLL,
+      - seeding each transformer primary/secondary side from TransformerDB,
+      - propagating those KVLL values through non-transformer branches (lines/switches).
     """
     root = ET.fromstring(txt_path.read_text(encoding="utf-8", errors="ignore"))
-    default_kvll = _get_default_kvll(root)
-    dev_to_sec_kv = _transformer_db_kvll(root)
-    dev_to_sec_bus = _secondary_bus_by_transformer(root)
+    kvll_default = _get_source_kvll(root)
+    tdb = _read_transformer_db(root)
 
+    # Graph over buses (non-transformer connections)
+    G: Dict[str, Set[str]] = {}
+
+    def add_edge(a: str, b: str) -> None:
+        if not a or not b:
+            return
+        G.setdefault(a, set()).add(b)
+        G.setdefault(b, set()).add(a)
+
+    # Seeds: bus -> kvll
+    seeds: Dict[str, float] = {}
+
+    # Source seed
+    src_node = (root.findtext(".//Sources/Source/SourceNodeID") or "").strip()
+    if src_node and kvll_default > 0:
+        seeds[src_node] = kvll_default
+
+    # Scan sections
+    for sec in root.findall(".//Sections/Section"):
+        f = (sec.findtext("FromNodeID") or "").strip()
+        t = (sec.findtext("ToNodeID") or "").strip()
+
+        if sec.find(".//Devices/Transformer") is not None:
+            # voltage-changing interface: create seeds using DB + NormalFeedingNodeID
+            xf = sec.find(".//Devices/Transformer")
+            dev_id = (xf.findtext("DeviceID") or "").strip()
+            normal = (xf.findtext("NormalFeedingNodeID") or "").strip()
+            vals = tdb.get(dev_id, {})
+            kvp = vals.get("kvp") or 0.0
+            kvs = vals.get("kvs") or 0.0
+
+            if kvp > 0 or kvs > 0:
+                if normal and normal == f:
+                    if kvp > 0: seeds.setdefault(f, kvp)
+                    if kvs > 0: seeds.setdefault(t, kvs)
+                elif normal and normal == t:
+                    if kvp > 0: seeds.setdefault(t, kvp)
+                    if kvs > 0: seeds.setdefault(f, kvs)
+                else:
+                    if kvp > 0: seeds.setdefault(f, kvp)
+                    if kvs > 0: seeds.setdefault(t, kvs)
+            continue
+
+        # Non-transformer branches: lines / switches → add graph edge
+        if sec.find(".//Devices/OverheadByPhase") is not None or \
+           sec.find(".//Devices/OverheadLineUnbalanced") is not None or \
+           sec.find(".//Devices/Switch") is not None:
+            add_edge(f, t)
+
+    # BFS propagate each seed over the non-transformer graph
     bus_kv: Dict[str, float] = {}
-    for dev, bus in dev_to_sec_bus.items():
-        sec_kv = dev_to_sec_kv.get(dev)
-        if sec_kv:
-            bus_kv[bus] = sec_kv
+    for start, kv in seeds.items():
+        if start in bus_kv:
+            continue
+        # standard BFS
+        q = deque([start])
+        bus_kv[start] = kv
+        while q:
+            u = q.popleft()
+            for v in G.get(u, ()):
+                if v not in bus_kv:
+                    bus_kv[v] = kv
+                    q.append(v)
 
-    # default applies implicitly for any bus not in overrides
-    bus_kv["_default_"] = default_kvll
+    # Fallback default for anything else (rare)
+    bus_kv["_default_"] = kvll_default if kvll_default > 0 else 0.0
     return bus_kv
 
 
-# -----------------------
-# Helpers: ID normalize
-# -----------------------
+# =======================
+# Load parsing
+# =======================
 def _norm_load_id(device_number: str, section_id: str, from_node_id: str) -> str:
     for src in (device_number, section_id, from_node_id):
         if not src:
@@ -120,31 +139,73 @@ def _norm_load_id(device_number: str, section_id: str, from_node_id: str) -> str
     return (device_number or section_id or from_node_id or "LD_?").replace(" ", "_")
 
 
-# -----------------------
-# Parse every SpotLoad
-# -----------------------
+def _kw_kvar_from_value(val: ET.Element) -> Tuple[float | None, float | None]:
+    """
+    Return (kW, kVAr) from a CustomerLoadValue node that can be:
+      - LoadValueKW_KVAR (KW, KVAR)
+      - LoadValueKW_PF   (KW, PF%)  → convert to kVAr using PF
+    """
+    lv = val.find("./LoadValue")
+    if lv is None:
+        return None, None
+    t = (lv.get("Type") or lv.tag or "").upper()
+
+    try:
+        kw = float(lv.findtext("KW")) if lv.find("KW") is not None else None
+    except Exception:
+        kw = None
+
+    if t.endswith("KW_KVAR"):
+        try:
+            kvar = float(lv.findtext("KVAR")) if lv.find("KVAR") is not None else None
+        except Exception:
+            kvar = None
+        return kw, kvar
+
+    if t.endswith("KW_PF"):
+        # PF is given as percent in many CYME exports (e.g., 95 → 0.95)
+        try:
+            pf_raw = float(lv.findtext("PF")) if lv.find("PF") is not None else None
+        except Exception:
+            pf_raw = None
+        if kw is None or pf_raw is None or pf_raw <= 0:
+            return kw, None
+        pf = pf_raw / 100.0 if pf_raw > 1.0 else pf_raw
+        try:
+            phi = math.acos(max(0.0, min(1.0, pf)))
+            kvar = kw * math.tan(phi)
+            return kw, kvar
+        except Exception:
+            return kw, None
+
+    # Unsupported/other style
+    return kw, None
+
+
 def _parse_spot_loads_all(txt_path: Path) -> List[Dict[str, Any]]:
     """
     Flat list of observations (one per phase value found).
     Keys: id, bus, phase, conn, kw, kvar, status, cust_type
     """
-    xml_text = txt_path.read_text(encoding="utf-8", errors="ignore")
-    root = ET.fromstring(xml_text)
+    root = ET.fromstring(txt_path.read_text(encoding="utf-8", errors="ignore"))
 
     out: List[Dict[str, Any]] = []
-    for sec in root.findall(".//Section"):
+    for sec in root.findall(".//Sections/Section"):
         section_id = (sec.findtext("./SectionID") or "").strip()
-        from_bus = (sec.findtext("./FromNodeID") or "").strip()
+        from_bus   = (sec.findtext("./FromNodeID") or "").strip()
 
-        spot = sec.find(".//SpotLoad")
+        spot = sec.find(".//Devices/SpotLoad")
         if spot is None:
             continue
 
-        dev_num = (spot.findtext("./DeviceNumber") or "").strip()
-        conn_cfg = (spot.findtext("./ConnectionConfiguration") or "").strip()
-        cust_type = (spot.findtext(".//CustomerLoad/CustomerType") or "").strip().upper()
+        dev_num   = (spot.findtext("./DeviceNumber") or "").strip()
+        conn_cfg  = (spot.findtext("./ConnectionConfiguration") or "").strip()
         status_txt = (spot.findtext(".//CustomerLoad/ConnectionStatus") or "").strip().lower()
-        status = 1 if status_txt == "connected" else 0
+        status     = 1 if status_txt == "connected" else 0
+
+        # Customer type is optional; use "" if missing
+        ct = spot.findtext(".//CustomerLoad/CustomerType")
+        cust_type = (ct or "").strip()
 
         load_id = _norm_load_id(dev_num, section_id, from_bus)
 
@@ -152,28 +213,24 @@ def _parse_spot_loads_all(txt_path: Path) -> List[Dict[str, Any]]:
             ph = (val.findtext("./Phase") or "").strip().upper()
             if ph not in PHASES:
                 continue
-            kw_txt = val.findtext(".//KW")
-            kvar_txt = val.findtext(".//KVAR")
-            try:
-                kw = float(kw_txt) if kw_txt is not None else None
-                kvar = float(kvar_txt) if kvar_txt is not None else None
-            except Exception:
-                kw, kvar = None, None
-            if kw is None or kvar is None:
-                continue
 
-            out.append(
-                {
-                    "id": load_id,
-                    "bus": from_bus,
-                    "phase": ph,
-                    "conn": conn_cfg,
-                    "kw": kw,
-                    "kvar": kvar,
-                    "status": status,
-                    "cust_type": cust_type,
-                }
-            )
+            kw, kvar = _kw_kvar_from_value(val)
+            if kw is None:
+                continue
+            if kvar is None:
+                # If still None, treat as 0 (rare)
+                kvar = 0.0
+
+            out.append({
+                "id": load_id,
+                "bus": from_bus,
+                "phase": ph,
+                "conn": conn_cfg,
+                "kw": kw,
+                "kvar": kvar,
+                "status": status,
+                "cust_type": cust_type,
+            })
 
     return out
 
@@ -186,63 +243,42 @@ def _group_by_device(observations: List[Dict[str, Any]]):
     meta: Dict[str, Dict[str, Any]] = {}
 
     for o in observations:
-        lid = o["id"]
-        ph = o["phase"]
+        lid = o["id"]; ph = o["phase"]
         acc.setdefault(lid, {})
         acc[lid].setdefault(ph, {"kw": 0.0, "kvar": 0.0})
-        acc[lid][ph]["kw"] += o["kw"]
+        acc[lid][ph]["kw"]   += o["kw"]
         acc[lid][ph]["kvar"] += o["kvar"]
 
-        meta[lid] = {
-            "bus": o["bus"],
-            "conn": o["conn"],
-            "status": o["status"],
-            "cust_type": o["cust_type"],
-        }
+        meta[lid] = {"bus": o["bus"], "conn": o["conn"], "status": o["status"], "cust_type": o["cust_type"]}
 
     single, two, three = [], [], []
 
     for lid, phase_map in acc.items():
         phases = sorted(phase_map.keys(), key=lambda p: PHASES.index(p))
         m = meta[lid]
-        entry = {
-            "ID": lid,
-            "Status": m["status"],
-            "Bus": m["bus"],
-            "Conn": m["conn"],
-            "CustType": m["cust_type"],
-        }
+        entry = {"ID": lid, "Status": m["status"], "Bus": m["bus"], "Conn": m["conn"], "CustType": m["cust_type"]}
 
         if len(phases) == 1:
-            ph = phases[0]
+            p = phases[0]
             row = dict(entry)
-            row.update({"Phase": ph, "P1": phase_map[ph]["kw"], "Q1": phase_map[ph]["kvar"]})
+            row.update({"Phase": p, "P1": phase_map[p]["kw"], "Q1": phase_map[p]["kvar"]})
             single.append(row)
         elif len(phases) == 2:
             p1, p2 = phases[0], phases[1]
             row = dict(entry)
-            row.update(
-                {
-                    "PhasePair": (p1, p2),
-                    "P1": phase_map[p1]["kw"],
-                    "Q1": phase_map[p1]["kvar"],
-                    "P2": phase_map[p2]["kw"],
-                    "Q2": phase_map[p2]["kvar"],
-                }
-            )
+            row.update({
+                "PhasePair": (p1, p2),
+                "P1": phase_map[p1]["kw"], "Q1": phase_map[p1]["kvar"],
+                "P2": phase_map[p2]["kw"], "Q2": phase_map[p2]["kvar"],
+            })
             two.append(row)
         elif len(phases) == 3:
             row = dict(entry)
-            row.update(
-                {
-                    "P_A": phase_map["A"]["kw"],
-                    "Q_A": phase_map["A"]["kvar"],
-                    "P_B": phase_map["B"]["kw"],
-                    "Q_B": phase_map["B"]["kvar"],
-                    "P_C": phase_map["C"]["kw"],
-                    "Q_C": phase_map["C"]["kvar"],
-                }
-            )
+            row.update({
+                "P_A": phase_map["A"]["kw"], "Q_A": phase_map["A"]["kvar"],
+                "P_B": phase_map["B"]["kw"], "Q_B": phase_map["B"]["kvar"],
+                "P_C": phase_map["C"]["kw"], "Q_C": phase_map["C"]["kvar"],
+            })
             three.append(row)
 
     return single, two, three
@@ -286,13 +322,11 @@ def write_load_sheet(xw, input_path: Path) -> None:
     ws.write(0, 0, "Type", bold)
 
     # Parse + group
-    xml_text = input_path.read_text(encoding="utf-8", errors="ignore")
-    root = ET.fromstring(xml_text)
     obs = _parse_spot_loads_all(input_path)
     single_rows, two_rows, three_rows = _group_by_device(obs)
 
-    # Build bus -> V(kV, LL) map (default 4.16, with 634 -> 0.48 via transformer DB)
-    bus_kvll = _kvll_map_for_buses(input_path)
+    # Bus voltage map (default + transformer-derived overrides + propagation)
+    bus_kvll = _build_voltage_map(input_path)
 
     # Anchor rows
     r = 10
@@ -348,7 +382,6 @@ def write_load_sheet(xw, input_path: Path) -> None:
         kz, ki, kp = _zip_flags(row["CustType"])
         bus = row["Bus"]
         vkv = bus_kvll.get(bus, bus_kvll["_default_"])
-
         conn = (row["Conn"] or "").lower()
         ws.write(rcur, 0, row["ID"])
         ws.write_number(rcur, 1, row["Status"], num0)
@@ -359,7 +392,7 @@ def write_load_sheet(xw, input_path: Path) -> None:
         ws.write_number(rcur, 6, ki, num0)
         ws.write_number(rcur, 7, kp, num0)
         ws.write_number(rcur, 8, 0, num0)  # Use initial voltage?
-        ws.write(rcur, 9, f"{bus}{PHASE_SUFFIX.get(row['Phase'], '')}")
+        ws.write(rcur, 9,  f"{bus}{PHASE_SUFFIX.get(row['Phase'], '')}")
         ws.write_number(rcur, 10, row["P1"], num0)
         ws.write_number(rcur, 11, row["Q1"], num0)
         rcur += 1

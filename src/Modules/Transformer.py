@@ -10,13 +10,28 @@ def _phase_count(phase_str: str) -> int:
     return len({p for p in s if p in "ABC"}) or 3
 
 
-def _conn_text(conn: str) -> str:
-    c = (conn or "").upper()
-    if "Y" in c:
+def _decode_conn(code: str) -> Tuple[str, str]:
+    """
+    Map CYME connection string to (primary, secondary) textual forms.
+    Examples:
+        "Yg_Yg", "Y_Y", "Y_D", "Yg_D", "D_Y", "D_D"
+    We report only topology (wye/delta), not grounding.
+    """
+    if not code:
+        return "wye", "wye"
+    parts = code.replace("-", "_").split("_")
+    if len(parts) < 2:
+        return "wye", "wye"
+
+    def one(s: str) -> str:
+        s = s.upper()
+        if s.startswith("D"):
+            return "delta"
+        if s.startswith("Y"):
+            return "wye"
         return "wye"
-    if "D" in c:
-        return "delta"
-    return "wye"
+
+    return one(parts[0]), one(parts[1])
 
 
 def _bus_labels(bus: str, phase_str: str) -> Tuple[str, str, str]:
@@ -72,7 +87,7 @@ def _read_transformer_db(root: ET.Element) -> Dict[str, Dict[str, Any]]:
             "kva": float(f("NominalRatingKVA") or 0) or float(f("NominalRating") or 0),
             "z_pct": float(f("PositiveSequenceImpedancePercent") or 0),
             "xr": float(f("XRRatio") or 0),
-            "conn": f("TransformerConnection") or f("Connection") or "Yg",
+            "conn": f("TransformerConnection") or f("Connection"),
         }
     return out
 
@@ -93,18 +108,23 @@ def _parse_multiphase_2w_rows(input_path: Path) -> List[List[Any]]:
             continue
 
         from_bus = (sec.findtext("FromNodeID") or "").strip()
-        to_bus = (sec.findtext("ToNodeID") or "").strip()
-        phase = (sec.findtext("Phase") or "ABC").strip().upper()
+        to_bus   = (sec.findtext("ToNodeID") or "").strip()
+        phase    = (sec.findtext("Phase") or "ABC").strip().upper()
         status_text = (xf.findtext("ConnectionStatus") or "Connected").strip().lower()
-        status = 1 if status_text == "connected" else 0
+        status      = 1 if status_text == "connected" else 0
         dev_id = (xf.findtext("DeviceID") or "").strip()
 
-        # Lookup transformer DB
+        # Section-level connection is authoritative; fall back to DB if absent
+        conn_code = (xf.findtext("TransformerConnection") or "").strip()
+        if not conn_code and dev_id in tdb:
+            conn_code = tdb[dev_id].get("conn") or ""
+        conn_p, conn_s = _decode_conn(conn_code)
+
+        # Lookup ratings/impedance in DB
         info = tdb.get(dev_id, {})
-        kvp = float(info.get("kvp") or 0.0)
-        kvs = float(info.get("kvs") or 0.0)
-        kva = float(info.get("kva") or 0.0)
-        conn = _conn_text(info.get("conn", ""))
+        kvp  = float(info.get("kvp") or 0.0)
+        kvs  = float(info.get("kvs") or 0.0)
+        kva  = float(info.get("kva") or 0.0)
         x_pu, rw1, rw2 = _compute_x_rw(info.get("z_pct", 0.0), info.get("xr", 0.0))
 
         # Labels with phases
@@ -114,8 +134,8 @@ def _parse_multiphase_2w_rows(input_path: Path) -> List[List[Any]]:
         rid = f"TR1_{from_bus}_{to_bus}"
         rows.append([
             rid, status, _phase_count(phase),
-            b1a, b1b, b1c, kvp, kva, conn,
-            b2a, b2b, b2c, kvs, kva, conn,
+            b1a, b1b, b1c, kvp, kva, conn_p,
+            b2a, b2b, b2c, kvs, kva, conn_s,
             0, 0, 0, -16, 16, 10, 10,
             x_pu, rw1, rw2
         ])
@@ -130,11 +150,7 @@ def write_transformer_sheet(xw, input_path: Path) -> None:
     - Blocks start on row 11
     - Titles merged A:D, 'Go to Type List' in column E (links to A1)
     - One blank row between blocks
-    - Top 'Type' links select the full table ranges:
-        PosSeq2wXF: A:K
-        PosSeq3wXF: A:S
-        Multiphase2wXF: A:Y
-        Multiphase2wXFMutual: A:AA
+    - Top 'Type' links select the full table ranges.
     """
     wb = xw.book
     ws = wb.add_worksheet("Transformer")
@@ -157,30 +173,24 @@ def write_transformer_sheet(xw, input_path: Path) -> None:
     for c, w in enumerate(widths):
         ws.set_column(c, c, w)
 
-    # Precompute data for MP 2W block
+    # Data rows
     rows_mp2w = _parse_multiphase_2w_rows(input_path)
 
-    # Blocks start at row 11 (1-based) => index 10
+    # Anchors (blocks start at row 11)
     r = 10
+    b1_t, b1_h, b1_e = r, r+1, r+2; r = b1_e + 2                # PosSeq 2W (empty)
+    b2_t, b2_h, b2_e = r, r+1, r+2; r = b2_e + 2                # PosSeq 3W (empty)
+    b3_t, b3_h, b3_first = r, r+1, r+2; b3_e = b3_first + len(rows_mp2w); r = b3_e + 2
+    b4_t, b4_h, b4_e = r, r+1, r+2                               # MP 2W w/ Mutual (empty)
 
-    # Block 1: Positive-Sequence 2W (empty)
-    b1_title = r; b1_hdr = r + 1; b1_end = r + 2; r = b1_end + 2
-    # Block 2: Positive-Sequence 3W (empty)
-    b2_title = r; b2_hdr = r + 1; b2_end = r + 2; r = b2_end + 2
-    # Block 3: Multiphase 2W (data)
-    b3_title = r; b3_hdr = r + 1; b3_first = r + 2
-    b3_end = b3_first + len(rows_mp2w); r = b3_end + 2
-    # Block 4: Multiphase 2W w/ Mutual (empty)
-    b4_title = r; b4_hdr = r + 1; b4_end = r + 2
-
-    # Type row + links
+    # Type links
     ws.write(0, 0, "Type", bold)
-    ws.write_url(1, 0, f"internal:'Transformer'!A{b1_hdr+1}:K{b1_end+1}", link_fmt, "PositiveSeq2wXF")
-    ws.write_url(2, 0, f"internal:'Transformer'!A{b2_hdr+1}:S{b2_end+1}", link_fmt, "PositiveSeq3wXF")
-    ws.write_url(3, 0, f"internal:'Transformer'!A{b3_hdr+1}:Y{b3_end+1}", link_fmt, "Multiphase2wXF")
-    ws.write_url(4, 0, f"internal:'Transformer'!A{b4_hdr+1}:AA{b4_end+1}", link_fmt, "Multiphase2wXFMutual")
+    ws.write_url(1, 0, f"internal:'Transformer'!A{b1_h+1}:K{b1_e+1}", link_fmt, "PositiveSeq2wXF")
+    ws.write_url(2, 0, f"internal:'Transformer'!A{b2_h+1}:S{b2_e+1}", link_fmt, "PositiveSeq3wXF")
+    ws.write_url(3, 0, f"internal:'Transformer'!A{b3_h+1}:Y{b3_e+1}", link_fmt, "Multiphase2wXF")
+    ws.write_url(4, 0, f"internal:'Transformer'!A{b4_h+1}:AA{b4_e+1}", link_fmt, "Multiphase2wXFMutual")
 
-    # Important notes (rows 8–10)
+    # Notes
     ws.merge_range(7, 0, 7, 7, "Important notes:", notes_hdr)
     ws.merge_range(8, 0, 8, 7, "Default order of blocks and columns after row 11 must not change", notes_txt)
     ws.merge_range(9, 0, 9, 7, "One empty row between End of each block and the next block is mandatory; otherwise, empty rows are NOT allowed", notes_txt)
@@ -188,22 +198,22 @@ def write_transformer_sheet(xw, input_path: Path) -> None:
     go_top = "internal:'Transformer'!A1"
 
     # ---- Block 1: Positive-Sequence 2W (empty) ----
-    ws.merge_range(b1_title, 0, b1_title, 2, "Positive-Sequence 2W-Transformer", bold)
-    ws.write_url(b1_title, 3, go_top, link_fmt, "Go to Type List")
-    ws.write_row(b1_hdr, 0, ["ID","Status","From bus","To bus","R (pu)","Xl (pu)","Gmag (pu)","Bmag (pu)","Ratio W1 (pu)","Ratio W2 (pu)","Phase Shift (deg)"], th)
-    ws.merge_range(b1_end, 0, b1_end, 2, "End of Positive-Sequence 2W-Transformer")
+    ws.merge_range(b1_t, 0, b1_t, 2, "Positive-Sequence 2W-Transformer", bold)
+    ws.write_url(b1_t, 3, go_top, link_fmt, "Go to Type List")
+    ws.write_row(b1_h, 0, ["ID","Status","From bus","To bus","R (pu)","Xl (pu)","Gmag (pu)","Bmag (pu)","Ratio W1 (pu)","Ratio W2 (pu)","Phase Shift (deg)"], th)
+    ws.merge_range(b1_e, 0, b1_e, 2, "End of Positive-Sequence 2W-Transformer")
 
     # ---- Block 2: Positive-Sequence 3W (empty) ----
-    ws.merge_range(b2_title, 0, b2_title, 2, "Positive-Sequence 3W-Transformer", bold)
-    ws.write_url(b2_title, 3, go_top, link_fmt, "Go to Type List")
-    ws.write_row(b2_hdr, 0, ["ID","Status","Bus1","Bus2","Bus3","R_12 (pu)","Xl_12 (pu)","R_23 (pu)","Xl_23 (pu)","R_31 (pu)","Xl_31 (pu)","Gmag (pu)","Bmag (pu)","Ratio W1 (pu)","Ratio W2 (pu)","Ratio W3 (pu)","Phase Shift W1 (deg)","Phase Shift W2 (deg)","Phase Shift W3 (deg)"], th)
-    ws.merge_range(b2_end, 0, b2_end, 2, "End of Positive-Sequence 3W-Transformer")
+    ws.merge_range(b2_t, 0, b2_t, 2, "Positive-Sequence 3W-Transformer", bold)
+    ws.write_url(b2_t, 3, go_top, link_fmt, "Go to Type List")
+    ws.write_row(b2_h, 0, ["ID","Status","Bus1","Bus2","Bus3","R_12 (pu)","Xl_12 (pu)","R_23 (pu)","Xl_23 (pu)","R_31 (pu)","Xl_31 (pu)","Gmag (pu)","Bmag (pu)","Ratio W1 (pu)","Ratio W2 (pu)","Ratio W3 (pu)","Phase Shift W1 (deg)","Phase Shift W2 (deg)","Phase Shift W3 (deg)"], th)
+    ws.merge_range(b2_e, 0, b2_e, 2, "End of Positive-Sequence 3W-Transformer")
 
     # ---- Block 3: Multiphase 2W (parsed) ----
-    ws.merge_range(b3_title, 0, b3_title, 2, "Multiphase 2W-Transformer", bold)
-    ws.write_url(b3_title, 3, go_top, link_fmt, "Go to Type List")
+    ws.merge_range(b3_t, 0, b3_t, 2, "Multiphase 2W-Transformer", bold)
+    ws.write_url(b3_t, 3, go_top, link_fmt, "Go to Type List")
     ws.write_row(
-        b3_hdr, 0,
+        b3_h, 0,
         ["ID","Status","Number of phases",
          "Bus1","Bus2","Bus3","V (kV)","S_base (kVA)","Conn. type",
          "Bus1","Bus2","Bus3","V (kV)","S_base (kVA)","Conn. type",
@@ -229,13 +239,13 @@ def write_transformer_sheet(xw, input_path: Path) -> None:
         ws.write_number(rr,24, row[24], num8)
         rr += 1
 
-    ws.merge_range(b3_end, 0, b3_end, 3, "End of Multiphase 2W-Transformer")
+    ws.merge_range(b3_e, 0, b3_e, 3, "End of Multiphase 2W-Transformer")
 
     # ---- Block 4: Multiphase 2W with Mutual (empty) ----
-    ws.merge_range(b4_title, 0, b4_title, 2, "Multiphase 2W-Transformer with Mutual Impedance", bold)
-    ws.write_url(b4_title, 3, go_top, link_fmt, "Go to Type List")
+    ws.merge_range(b4_t, 0, b4_t, 2, "Multiphase 2W-Transformer with Mutual Impedance", bold)
+    ws.write_url(b4_t, 3, go_top, link_fmt, "Go to Type List")
     ws.write_row(
-        b4_hdr, 0,
+        b4_h, 0,
         ["ID","Status","Number of phases",
          "Bus1","Bus2","Bus3","V (kV)","S_base (kVA)","Conn. type",
          "Bus1","Bus2","Bus3","V (kV)","S_base (kVA)","Conn. type",
@@ -243,4 +253,4 @@ def write_transformer_sheet(xw, input_path: Path) -> None:
          "Z0 leakage (pu)","Z1 leakage (pu)","X0/R0","X1/R1","No Load Loss (kW)"],
         th
     )
-    ws.merge_range(b4_end, 0, b4_end, 3, "End of Multiphase 2W-Transformer with Mutual Impedance")
+    ws.merge_range(b4_e, 0, b4_e, 3, "End of Multiphase 2W-Transformer with Mutual Impedance")
