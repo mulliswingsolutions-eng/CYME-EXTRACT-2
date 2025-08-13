@@ -7,11 +7,12 @@ import xml.etree.ElementTree as ET
 from collections import deque
 from typing import Dict, List, Tuple, Any, Set
 
-# -----------------------
-# Constants
-# -----------------------
 PHASES = ("A", "B", "C")
 PHASE_SUFFIX = {"A": "_a", "B": "_b", "C": "_c"}
+
+
+def _read_xml(path: Path) -> ET.Element:
+    return ET.fromstring(path.read_text(encoding="utf-8", errors="ignore"))
 
 
 # =======================
@@ -21,9 +22,10 @@ def _get_source_kvll(root: ET.Element) -> float:
     eq = root.find(".//Sources/Source/EquivalentSourceModels/EquivalentSourceModel/EquivalentSource")
     if eq is not None:
         try:
-            return float(eq.findtext("KVLL", "0") or "0")
+            v = eq.findtext("KVLL")
+            return float(v) if v not in (None, "") else 0.0
         except Exception:
-            pass
+            return 0.0
     return 0.0
 
 
@@ -36,7 +38,7 @@ def _read_transformer_db(root: ET.Element) -> Dict[str, Dict[str, float]]:
         def f(name: str) -> float:
             v = tdb.findtext(name)
             try:
-                return float(v) if v is not None and v != "" else 0.0
+                return float(v) if v not in (None, "") else 0.0
             except Exception:
                 return 0.0
         out[eid] = {
@@ -48,16 +50,19 @@ def _read_transformer_db(root: ET.Element) -> Dict[str, Dict[str, float]]:
 
 def _build_voltage_map(txt_path: Path) -> Dict[str, float]:
     """
-    Assign KVLL to buses by:
-      - seeding the source node with KVLL,
-      - seeding each transformer primary/secondary side from TransformerDB,
-      - propagating those KVLL values through non-transformer branches (lines/switches).
+    KVLL propagation rules:
+      - seed the source node with <KVLL>
+      - for each Transformer section, seed primary/secondary sides via TransformerDB
+        (use NormalFeedingNodeID when present to decide which side)
+      - build a graph of *pure network* branches (lines/cables/switches) that do NOT
+        contain SpotLoad/Shunt
+      - BFS propagate KVLL over that graph
     """
-    root = ET.fromstring(txt_path.read_text(encoding="utf-8", errors="ignore"))
+    root = _read_xml(txt_path)
     kvll_default = _get_source_kvll(root)
     tdb = _read_transformer_db(root)
 
-    # Graph over buses (non-transformer connections)
+    # Pure network graph
     G: Dict[str, Set[str]] = {}
 
     def add_edge(a: str, b: str) -> None:
@@ -69,25 +74,25 @@ def _build_voltage_map(txt_path: Path) -> Dict[str, float]:
     # Seeds: bus -> kvll
     seeds: Dict[str, float] = {}
 
-    # Source seed
     src_node = (root.findtext(".//Sources/Source/SourceNodeID") or "").strip()
     if src_node and kvll_default > 0:
         seeds[src_node] = kvll_default
 
-    # Scan sections
     for sec in root.findall(".//Sections/Section"):
-        f = (sec.findtext("FromNodeID") or "").strip()
-        t = (sec.findtext("ToNodeID") or "").strip()
+        f = (sec.findtext("./FromNodeID") or "").strip()
+        t = (sec.findtext("./ToNodeID") or "").strip()
 
-        if sec.find(".//Devices/Transformer") is not None:
-            # voltage-changing interface: create seeds using DB + NormalFeedingNodeID
-            xf = sec.find(".//Devices/Transformer")
+        has_spot  = sec.find(".//Devices/SpotLoad") is not None
+        has_shunt = (sec.find(".//Devices/ShuntCapacitor") is not None or
+                     sec.find(".//Devices/ShuntReactor") is not None)
+
+        xf = sec.find(".//Devices/Transformer")
+        if xf is not None:
             dev_id = (xf.findtext("DeviceID") or "").strip()
             normal = (xf.findtext("NormalFeedingNodeID") or "").strip()
             vals = tdb.get(dev_id, {})
             kvp = vals.get("kvp") or 0.0
             kvs = vals.get("kvs") or 0.0
-
             if kvp > 0 or kvs > 0:
                 if normal and normal == f:
                     if kvp > 0: seeds.setdefault(f, kvp)
@@ -100,18 +105,23 @@ def _build_voltage_map(txt_path: Path) -> Dict[str, float]:
                     if kvs > 0: seeds.setdefault(t, kvs)
             continue
 
-        # Non-transformer branches: lines / switches → add graph edge
-        if sec.find(".//Devices/OverheadByPhase") is not None or \
-           sec.find(".//Devices/OverheadLineUnbalanced") is not None or \
-           sec.find(".//Devices/Switch") is not None:
+        has_line = (
+            sec.find(".//Devices/OverheadLine") is not None or
+            sec.find(".//Devices/OverheadLineUnbalanced") is not None or
+            sec.find(".//Devices/OverheadByPhase") is not None or
+            sec.find(".//Devices/UndergroundCable") is not None
+        )
+        has_switch = sec.find(".//Devices/Switch") is not None
+
+        # Only add edges for *pure* network sections (skip if SpotLoad/Shunt also present)
+        if (has_line or has_switch) and not (has_spot or has_shunt):
             add_edge(f, t)
 
-    # BFS propagate each seed over the non-transformer graph
+    # BFS
     bus_kv: Dict[str, float] = {}
     for start, kv in seeds.items():
         if start in bus_kv:
             continue
-        # standard BFS
         q = deque([start])
         bus_kv[start] = kv
         while q:
@@ -121,7 +131,6 @@ def _build_voltage_map(txt_path: Path) -> Dict[str, float]:
                     bus_kv[v] = kv
                     q.append(v)
 
-    # Fallback default for anything else (rare)
     bus_kv["_default_"] = kvll_default if kvll_default > 0 else 0.0
     return bus_kv
 
@@ -129,83 +138,109 @@ def _build_voltage_map(txt_path: Path) -> Dict[str, float]:
 # =======================
 # Load parsing
 # =======================
+def _sanitize_id(s: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_]+", "_", s).strip("_")
+
+
 def _norm_load_id(device_number: str, section_id: str, from_node_id: str) -> str:
+    # Unique, stable; prefer DeviceNumber, else SectionID, else FromNode
     for src in (device_number, section_id, from_node_id):
-        if not src:
-            continue
-        m = re.search(r"(\d+)", src)
-        if m:
-            return f"LD_{m.group(1)}"
-    return (device_number or section_id or from_node_id or "LD_?").replace(" ", "_")
+        src = (src or "").strip()
+        if src:
+            return f"LD_{_sanitize_id(src)}"
+    return "LD_unknown"
 
 
-def _kw_kvar_from_value(val: ET.Element) -> Tuple[float | None, float | None]:
-    """
-    Return (kW, kVAr) from a CustomerLoadValue node that can be:
-      - LoadValueKW_KVAR (KW, KVAR)
-      - LoadValueKW_PF   (KW, PF%)  → convert to kVAr using PF
-    """
+def _get_type_attr(elem: ET.Element) -> str:
+    t = elem.get("Type")
+    if not t:
+        for k, v in elem.attrib.items():
+            if k.endswith("}type"):
+                t = v
+                break
+    return (t or "").upper()
+
+
+def _kw_kvar_from_value(val: ET.Element) -> tuple[float | None, float | None]:
     lv = val.find("./LoadValue")
     if lv is None:
         return None, None
-    t = (lv.get("Type") or lv.tag or "").upper()
 
-    try:
-        kw = float(lv.findtext("KW")) if lv.find("KW") is not None else None
-    except Exception:
-        kw = None
+    def _f(x: str | None) -> float | None:
+        try:
+            return float(x) if x not in (None, "") else None
+        except Exception:
+            return None
+
+    t = _get_type_attr(lv)
 
     if t.endswith("KW_KVAR"):
-        try:
-            kvar = float(lv.findtext("KVAR")) if lv.find("KVAR") is not None else None
-        except Exception:
-            kvar = None
-        return kw, kvar
+        return _f(lv.findtext("KW")), _f(lv.findtext("KVAR"))
 
     if t.endswith("KW_PF"):
-        # PF is given as percent in many CYME exports (e.g., 95 → 0.95)
-        try:
-            pf_raw = float(lv.findtext("PF")) if lv.find("PF") is not None else None
-        except Exception:
-            pf_raw = None
+        kw = _f(lv.findtext("KW"))
+        pf_raw = _f(lv.findtext("PF"))
         if kw is None or pf_raw is None or pf_raw <= 0:
             return kw, None
         pf = pf_raw / 100.0 if pf_raw > 1.0 else pf_raw
+        pf = max(0.0, min(1.0, pf))
         try:
-            phi = math.acos(max(0.0, min(1.0, pf)))
+            phi = math.acos(pf)
             kvar = kw * math.tan(phi)
             return kw, kvar
         except Exception:
             return kw, None
 
-    # Unsupported/other style
-    return kw, None
+    if t.endswith("KVA_PF"):
+        kva = _f(lv.findtext("KVA")); pf_raw = _f(lv.findtext("PF"))
+        if kva is None or pf_raw is None or pf_raw <= 0:
+            return None, None
+        pf = pf_raw / 100.0 if pf_raw > 1.0 else pf_raw
+        pf = max(0.0, min(1.0, pf))
+        p = kva * pf
+        try:
+            phi = math.acos(pf)
+            q = kva * math.sin(phi)
+        except Exception:
+            q = None
+        return p, q
+
+    if t.endswith("KVA_KVAR"):
+        kva = _f(lv.findtext("KVA")); kvar = _f(lv.findtext("KVAR"))
+        if kva is None or kvar is None or kva < abs(kvar):
+            return None, kvar
+        p = math.sqrt(max(0.0, kva * kva - (kvar * kvar)))
+        return p, kvar
+
+    # Fallback
+    return _f(lv.findtext("KW")), _f(lv.findtext("KVAR"))
 
 
 def _parse_spot_loads_all(txt_path: Path) -> List[Dict[str, Any]]:
     """
-    Flat list of observations (one per phase value found).
+    One observation per phase value.
     Keys: id, bus, phase, conn, kw, kvar, status, cust_type
     """
-    root = ET.fromstring(txt_path.read_text(encoding="utf-8", errors="ignore"))
-
+    root = _read_xml(Path(txt_path))
     out: List[Dict[str, Any]] = []
-    for sec in root.findall(".//Sections/Section"):
-        section_id = (sec.findtext("./SectionID") or "").strip()
-        from_bus   = (sec.findtext("./FromNodeID") or "").strip()
 
+    for sec in root.findall(".//Sections/Section"):
         spot = sec.find(".//Devices/SpotLoad")
         if spot is None:
             continue
 
-        dev_num   = (spot.findtext("./DeviceNumber") or "").strip()
-        conn_cfg  = (spot.findtext("./ConnectionConfiguration") or "").strip()
+        section_id = (sec.findtext("./SectionID") or "").strip()
+        from_bus   = (sec.findtext("./FromNodeID") or "").strip()
+        # Always bind to FromNodeID → real network side
+        if not from_bus:
+            continue
+
+        dev_num    = (spot.findtext("./DeviceNumber") or "").strip()
+        conn_cfg   = (spot.findtext("./ConnectionConfiguration") or "").strip()
         status_txt = (spot.findtext(".//CustomerLoad/ConnectionStatus") or "").strip().lower()
         status     = 1 if status_txt == "connected" else 0
 
-        # Customer type is optional; use "" if missing
-        ct = spot.findtext(".//CustomerLoad/CustomerType")
-        cust_type = (ct or "").strip()
+        cust_type  = (spot.findtext(".//CustomerLoad/CustomerType") or "").strip()
 
         load_id = _norm_load_id(dev_num, section_id, from_bus)
 
@@ -213,21 +248,17 @@ def _parse_spot_loads_all(txt_path: Path) -> List[Dict[str, Any]]:
             ph = (val.findtext("./Phase") or "").strip().upper()
             if ph not in PHASES:
                 continue
-
             kw, kvar = _kw_kvar_from_value(val)
-            if kw is None:
+            if kw is None and kvar is None:
                 continue
-            if kvar is None:
-                # If still None, treat as 0 (rare)
-                kvar = 0.0
 
             out.append({
                 "id": load_id,
                 "bus": from_bus,
                 "phase": ph,
                 "conn": conn_cfg,
-                "kw": kw,
-                "kvar": kvar,
+                "kw": float(kw or 0.0),
+                "kvar": float(kvar or 0.0),
                 "status": status,
                 "cust_type": cust_type,
             })
@@ -236,7 +267,7 @@ def _parse_spot_loads_all(txt_path: Path) -> List[Dict[str, Any]]:
 
 
 # -----------------------
-# Group: 1φ / 2φ / 3φ
+# Group rows: 1φ / 2φ / 3φ
 # -----------------------
 def _group_by_device(observations: List[Dict[str, Any]]):
     acc: Dict[str, Dict[str, Dict[str, float]]] = {}
@@ -248,33 +279,28 @@ def _group_by_device(observations: List[Dict[str, Any]]):
         acc[lid].setdefault(ph, {"kw": 0.0, "kvar": 0.0})
         acc[lid][ph]["kw"]   += o["kw"]
         acc[lid][ph]["kvar"] += o["kvar"]
-
         meta[lid] = {"bus": o["bus"], "conn": o["conn"], "status": o["status"], "cust_type": o["cust_type"]}
 
     single, two, three = [], [], []
-
     for lid, phase_map in acc.items():
         phases = sorted(phase_map.keys(), key=lambda p: PHASES.index(p))
         m = meta[lid]
-        entry = {"ID": lid, "Status": m["status"], "Bus": m["bus"], "Conn": m["conn"], "CustType": m["cust_type"]}
+        base = {"ID": lid, "Status": m["status"], "Bus": m["bus"], "Conn": m["conn"], "CustType": m["cust_type"]}
 
         if len(phases) == 1:
             p = phases[0]
-            row = dict(entry)
-            row.update({"Phase": p, "P1": phase_map[p]["kw"], "Q1": phase_map[p]["kvar"]})
+            row = dict(base); row.update({"Phase": p, "P1": phase_map[p]["kw"], "Q1": phase_map[p]["kvar"]})
             single.append(row)
         elif len(phases) == 2:
             p1, p2 = phases[0], phases[1]
-            row = dict(entry)
-            row.update({
+            row = dict(base); row.update({
                 "PhasePair": (p1, p2),
                 "P1": phase_map[p1]["kw"], "Q1": phase_map[p1]["kvar"],
                 "P2": phase_map[p2]["kw"], "Q2": phase_map[p2]["kvar"],
             })
             two.append(row)
         elif len(phases) == 3:
-            row = dict(entry)
-            row.update({
+            row = dict(base); row.update({
                 "P_A": phase_map["A"]["kw"], "Q_A": phase_map["A"]["kvar"],
                 "P_B": phase_map["B"]["kw"], "Q_B": phase_map["B"]["kvar"],
                 "P_C": phase_map["C"]["kw"], "Q_C": phase_map["C"]["kvar"],
@@ -285,15 +311,15 @@ def _group_by_device(observations: List[Dict[str, Any]]):
 
 
 # -----------------------
-# Kz / Ki / Kp flags
+# ZIP flags
 # -----------------------
-def _zip_flags(cust_type: str) -> Tuple[int, int, int]:
+def _zip_flags(cust_type: str) -> tuple[int, int, int]:
     t = (cust_type or "").upper()
     if t.startswith("Z"):
         return 1, 0, 0
     if t.startswith("I"):
         return 0, 1, 0
-    return 0, 0, 1  # PQ or anything else -> constant power
+    return 0, 0, 1
 
 
 # =======================
@@ -318,17 +344,17 @@ def write_load_sheet(xw, input_path: Path) -> None:
     for c, w in enumerate(widths):
         ws.set_column(c, c, w)
 
-    # Type header + top links
+    # Header
     ws.write(0, 0, "Type", bold)
 
     # Parse + group
     obs = _parse_spot_loads_all(input_path)
     single_rows, two_rows, three_rows = _group_by_device(obs)
 
-    # Bus voltage map (default + transformer-derived overrides + propagation)
+    # Voltage map
     bus_kvll = _build_voltage_map(input_path)
 
-    # Anchor rows
+    # Anchors
     r = 10
     b1_t, b1_h, b1_e = r, r + 1, r + 2; r = b1_e + 2
     b2_t, b2_h, b2_e = r, r + 1, r + 2; r = b2_e + 2
@@ -337,13 +363,13 @@ def write_load_sheet(xw, input_path: Path) -> None:
     b5_t, b5_h, b5_first = r, r + 1, r + 2; b5_e = b5_first + len(two_rows); r = b5_e + 2
     b6_t, b6_h, b6_first = r, r + 1, r + 2; b6_e = b6_first + len(three_rows)
 
-    # Top link ranges (with ThreePhaseZIPLoad in B2)
-    ws.write_url(1, 0, f"internal:'Load'!A{b1_h+1}:E{b1_e+1}", link_fmt, "PositiveSeqZload")        # A2
-    ws.write_url(1, 1, f"internal:'Load'!A{b6_h+1}:R{b6_e+1}", link_fmt, "ThreePhaseZIPLoad")       # B2
-    ws.write_url(2, 0, f"internal:'Load'!A{b2_h+1}:E{b2_e+1}", link_fmt, "PositiveSeqPload")        # A3
-    ws.write_url(3, 0, f"internal:'Load'!A{b3_h+1}:E{b3_e+1}", link_fmt, "PositiveSeqIload")        # A4
-    ws.write_url(4, 0, f"internal:'Load'!A{b4_h+1}:L{b4_e+1}", link_fmt, "SinglePhaseZIPLoad")      # A5
-    ws.write_url(5, 0, f"internal:'Load'!A{b5_h+1}:O{b5_e+1}", link_fmt, "TwoPhaseZIPLoad")         # A6
+    # Top links
+    ws.write_url(1, 0, f"internal:'Load'!A{b1_h+1}:E{b1_e+1}", link_fmt, "PositiveSeqZload")
+    ws.write_url(1, 1, f"internal:'Load'!A{b6_h+1}:R{b6_e+1}", link_fmt, "ThreePhaseZIPLoad")
+    ws.write_url(2, 0, f"internal:'Load'!A{b2_h+1}:E{b2_e+1}", link_fmt, "PositiveSeqPload")
+    ws.write_url(3, 0, f"internal:'Load'!A{b3_h+1}:E{b3_e+1}", link_fmt, "PositiveSeqIload")
+    ws.write_url(4, 0, f"internal:'Load'!A{b4_h+1}:L{b4_e+1}", link_fmt, "SinglePhaseZIPLoad")
+    ws.write_url(5, 0, f"internal:'Load'!A{b5_h+1}:O{b5_e+1}", link_fmt, "TwoPhaseZIPLoad")
 
     # Notes (rows 8–10), merged A:H
     ws.merge_range(7, 0, 7, 7, "Important notes:", notes_hdr)
@@ -391,7 +417,7 @@ def write_load_sheet(xw, input_path: Path) -> None:
         ws.write_number(rcur, 5, kz, num0)
         ws.write_number(rcur, 6, ki, num0)
         ws.write_number(rcur, 7, kp, num0)
-        ws.write_number(rcur, 8, 0, num0)  # Use initial voltage?
+        ws.write_number(rcur, 8, 0, num0)
         ws.write(rcur, 9,  f"{bus}{PHASE_SUFFIX.get(row['Phase'], '')}")
         ws.write_number(rcur, 10, row["P1"], num0)
         ws.write_number(rcur, 11, row["Q1"], num0)
@@ -414,7 +440,6 @@ def write_load_sheet(xw, input_path: Path) -> None:
         vkv = bus_kvll.get(bus, bus_kvll["_default_"])
         p1, p2 = row["PhasePair"]
         conn = (row["Conn"] or "").lower()
-
         ws.write(rcur, 0, row["ID"]); ws.write_number(rcur, 1, row["Status"], num0)
         ws.write_number(rcur, 2, vkv, num2)
         ws.write_number(rcur, 3, 0.2, num2)
@@ -443,14 +468,13 @@ def write_load_sheet(xw, input_path: Path) -> None:
         bus = row["Bus"]
         vkv = bus_kvll.get(bus, bus_kvll["_default_"])
         conn = (row["Conn"] or "").lower()
-
         ws.write(rcur, 0, row["ID"]); ws.write_number(rcur, 1, row["Status"], num0)
         ws.write_number(rcur, 2, vkv, num2)
         ws.write_number(rcur, 3, 0.2, num2)
         ws.write(rcur, 4, "wye" if conn.startswith("y") else "delta" if conn.startswith("d") else "")
         ws.write_number(rcur, 5, kz, num0); ws.write_number(rcur, 6, ki, num0); ws.write_number(rcur, 7, kp, num0)
         ws.write_number(rcur, 8, 0, num0)
-        ws.write(rcur, 9,  f"{bus}{PHASE_SUFFIX['A']}"); ws.write(rcur,10, f"{bus}{PHASE_SUFFIX['B']}"); ws.write(rcur,11, f"{bus}{PHASE_SUFFIX['C']}")
+        ws.write(rcur, 9,  f"{bus}_a"); ws.write(rcur,10, f"{bus}_b"); ws.write(rcur,11, f"{bus}_c")
         ws.write_number(rcur,12, row["P_A"], num0); ws.write_number(rcur,13, row["Q_A"], num0)
         ws.write_number(rcur,14, row["P_B"], num0); ws.write_number(rcur,15, row["Q_B"], num0)
         ws.write_number(rcur,16, row["P_C"], num0); ws.write_number(rcur,17, row["Q_C"], num0)
