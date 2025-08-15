@@ -17,8 +17,8 @@ from Modules.Switch import write_switch_sheet
 
 # ===== Paths (adjust as needed) =====
 
-INPUT_PATH = Path(__file__).parent.parent / "Examples/Example-13bus-modified.txt"
-OUTPUT_PATH = Path(__file__).parent.parent / "Outputs/CYME_Extract_13Bus.xlsx"
+#INPUT_PATH = Path(__file__).parent.parent / "Examples/Example-13bus-modified.txt"
+#OUTPUT_PATH = Path(__file__).parent.parent / "Outputs/CYME_Extract_13Bus.xlsx"
 
 #INPUT_PATH = Path(__file__).parent.parent / "Examples/Example-4bus.txt"
 #OUTPUT_PATH = Path(__file__).parent.parent / "Outputs/CYME_Extract_4Bus.xlsx"
@@ -26,8 +26,8 @@ OUTPUT_PATH = Path(__file__).parent.parent / "Outputs/CYME_Extract_13Bus.xlsx"
 #INPUT_PATH = Path(__file__).parent.parent / "Examples/Saint-John-CYME.txt"
 #OUTPUT_PATH = Path(__file__).parent.parent / "Outputs/CYME_Extract_Saint-John.xlsx"
 
-#INPUT_PATH = Path(__file__).parent.parent / "Examples/UNB Feeder.txt"
-#OUTPUT_PATH = Path(__file__).parent.parent / "Outputs/CYME_Extract_UNB.xlsx"
+INPUT_PATH = Path(__file__).parent.parent / "Examples/UNB Feeder.txt"
+OUTPUT_PATH = Path(__file__).parent.parent / "Outputs/CYME_Extract_UNB.xlsx"
 
 # ====================================
 

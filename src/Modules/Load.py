@@ -1,5 +1,6 @@
 # Modules/Load.py
 from __future__ import annotations
+
 from pathlib import Path
 import math
 import re
@@ -9,6 +10,7 @@ from typing import Dict, List, Tuple, Any, Set
 
 PHASES = ("A", "B", "C")
 PHASE_SUFFIX = {"A": "_a", "B": "_b", "C": "_c"}
+EPS = 1e-6  # numerical zero
 
 
 def _read_xml(path: Path) -> ET.Element:
@@ -35,12 +37,14 @@ def _read_transformer_db(root: ET.Element) -> Dict[str, Dict[str, float]]:
         eid = (tdb.findtext("EquipmentID") or "").strip()
         if not eid:
             continue
+
         def f(name: str) -> float:
             v = tdb.findtext(name)
             try:
                 return float(v) if v not in (None, "") else 0.0
             except Exception:
                 return 0.0
+
         out[eid] = {
             "kvp": f("PrimaryVoltage") or f("PrimaryKV"),
             "kvs": f("SecondaryVoltage") or f("SecondaryKV"),
@@ -50,19 +54,13 @@ def _read_transformer_db(root: ET.Element) -> Dict[str, Dict[str, float]]:
 
 def _build_voltage_map(txt_path: Path) -> Dict[str, float]:
     """
-    KVLL propagation rules:
-      - seed the source node with <KVLL>
-      - for each Transformer section, seed primary/secondary sides via TransformerDB
-        (use NormalFeedingNodeID when present to decide which side)
-      - build a graph of *pure network* branches (lines/cables/switches) that do NOT
-        contain SpotLoad/Shunt
-      - BFS propagate KVLL over that graph
+    Seed KVLL from <Sources> and transformer DB, then propagate through
+    'pure network' branches (lines/cables/switches) that do not host loads/shunts.
     """
     root = _read_xml(txt_path)
     kvll_default = _get_source_kvll(root)
     tdb = _read_transformer_db(root)
 
-    # Pure network graph
     G: Dict[str, Set[str]] = {}
 
     def add_edge(a: str, b: str) -> None:
@@ -71,9 +69,7 @@ def _build_voltage_map(txt_path: Path) -> Dict[str, float]:
         G.setdefault(a, set()).add(b)
         G.setdefault(b, set()).add(a)
 
-    # Seeds: bus -> kvll
     seeds: Dict[str, float] = {}
-
     src_node = (root.findtext(".//Sources/Source/SourceNodeID") or "").strip()
     if src_node and kvll_default > 0:
         seeds[src_node] = kvll_default
@@ -82,9 +78,9 @@ def _build_voltage_map(txt_path: Path) -> Dict[str, float]:
         f = (sec.findtext("./FromNodeID") or "").strip()
         t = (sec.findtext("./ToNodeID") or "").strip()
 
-        has_spot  = sec.find(".//Devices/SpotLoad") is not None
-        has_shunt = (sec.find(".//Devices/ShuntCapacitor") is not None or
-                     sec.find(".//Devices/ShuntReactor") is not None)
+        has_spot = sec.find(".//Devices/SpotLoad") is not None
+        has_shunt = (sec.find(".//Devices/ShuntCapacitor") is not None
+                     or sec.find(".//Devices/ShuntReactor") is not None)
 
         xf = sec.find(".//Devices/Transformer")
         if xf is not None:
@@ -106,19 +102,21 @@ def _build_voltage_map(txt_path: Path) -> Dict[str, float]:
             continue
 
         has_line = (
-            sec.find(".//Devices/OverheadLine") is not None or
-            sec.find(".//Devices/OverheadLineUnbalanced") is not None or
-            sec.find(".//Devices/OverheadByPhase") is not None or
-            sec.find(".//Devices/UndergroundCable") is not None
+            sec.find(".//Devices/OverheadLine") is not None
+            or sec.find(".//Devices/OverheadLineUnbalanced") is not None
+            or sec.find(".//Devices/OverheadByPhase") is not None
+            or sec.find(".//Devices/UndergroundCable") is not None
+            or sec.find(".//Devices/Underground") is not None
         )
         has_switch = sec.find(".//Devices/Switch") is not None
 
-        # Only add edges for *pure* network sections (skip if SpotLoad/Shunt also present)
         if (has_line or has_switch) and not (has_spot or has_shunt):
             add_edge(f, t)
 
-    # BFS
+    # BFS propagate
     bus_kv: Dict[str, float] = {}
+    from collections import deque
+
     for start, kv in seeds.items():
         if start in bus_kv:
             continue
@@ -143,7 +141,6 @@ def _sanitize_id(s: str) -> str:
 
 
 def _norm_load_id(device_number: str, section_id: str, from_node_id: str) -> str:
-    # Unique, stable; prefer DeviceNumber, else SectionID, else FromNode
     for src in (device_number, section_id, from_node_id):
         src = (src or "").strip()
         if src:
@@ -161,38 +158,61 @@ def _get_type_attr(elem: ET.Element) -> str:
     return (t or "").upper()
 
 
+def _float_or_none(x: str | None) -> float | None:
+    try:
+        return float(x) if x not in (None, "") else None
+    except Exception:
+        return None
+
+
 def _kw_kvar_from_value(val: ET.Element) -> tuple[float | None, float | None]:
+    """
+    Returns (kW, kVAr) using the best-available fields.
+    Supports:
+      - KW_KVAR
+      - KW_PF  (fallback to ConnectedKVA*PF when kW ~ 0 but KVA present)
+      - KVA_PF
+      - KVA_KVAR
+    """
     lv = val.find("./LoadValue")
     if lv is None:
         return None, None
 
-    def _f(x: str | None) -> float | None:
-        try:
-            return float(x) if x not in (None, "") else None
-        except Exception:
-            return None
-
     t = _get_type_attr(lv)
+    conn_kva = _float_or_none(val.findtext("ConnectedKVA"))
 
     if t.endswith("KW_KVAR"):
-        return _f(lv.findtext("KW")), _f(lv.findtext("KVAR"))
+        return _float_or_none(lv.findtext("KW")), _float_or_none(lv.findtext("KVAR"))
 
     if t.endswith("KW_PF"):
-        kw = _f(lv.findtext("KW"))
-        pf_raw = _f(lv.findtext("PF"))
-        if kw is None or pf_raw is None or pf_raw <= 0:
+        kw = _float_or_none(lv.findtext("KW"))
+        pf_raw = _float_or_none(lv.findtext("PF"))
+        if pf_raw is None or pf_raw <= 0:
             return kw, None
         pf = pf_raw / 100.0 if pf_raw > 1.0 else pf_raw
         pf = max(0.0, min(1.0, pf))
-        try:
-            phi = math.acos(pf)
-            kvar = kw * math.tan(phi)
-            return kw, kvar
-        except Exception:
-            return kw, None
+        # normal case: derive kvar from kw & pf
+        if kw is not None and abs(kw) > EPS:
+            try:
+                phi = math.acos(pf)
+                kvar = kw * math.tan(phi)
+                return kw, kvar
+            except Exception:
+                return kw, None
+        # fallback: use ConnectedKVA if given (handles files with KW=0 but KVA>0)
+        if conn_kva is not None and conn_kva > EPS:
+            p = conn_kva * pf
+            try:
+                phi = math.acos(pf)
+                q = conn_kva * math.sin(phi)
+            except Exception:
+                q = None
+            return p, q
+        return kw, None
 
     if t.endswith("KVA_PF"):
-        kva = _f(lv.findtext("KVA")); pf_raw = _f(lv.findtext("PF"))
+        kva = _float_or_none(lv.findtext("KVA"))
+        pf_raw = _float_or_none(lv.findtext("PF"))
         if kva is None or pf_raw is None or pf_raw <= 0:
             return None, None
         pf = pf_raw / 100.0 if pf_raw > 1.0 else pf_raw
@@ -206,20 +226,33 @@ def _kw_kvar_from_value(val: ET.Element) -> tuple[float | None, float | None]:
         return p, q
 
     if t.endswith("KVA_KVAR"):
-        kva = _f(lv.findtext("KVA")); kvar = _f(lv.findtext("KVAR"))
+        kva = _float_or_none(lv.findtext("KVA"))
+        kvar = _float_or_none(lv.findtext("KVAR"))
         if kva is None or kvar is None or kva < abs(kvar):
             return None, kvar
         p = math.sqrt(max(0.0, kva * kva - (kvar * kvar)))
         return p, kvar
 
     # Fallback
-    return _f(lv.findtext("KW")), _f(lv.findtext("KVAR"))
+    return _float_or_none(lv.findtext("KW")), _float_or_none(lv.findtext("KVAR"))
+
+
+def _expand_phases(phase_tag: str) -> List[str]:
+    pt = (phase_tag or "").strip().upper()
+    if pt in PHASES:
+        return [pt]
+    if pt in ("AB", "BC", "AC"):
+        return list(pt)
+    if pt in ("ABC", "", None):
+        return ["A", "B", "C"]
+    return []
 
 
 def _parse_spot_loads_all(txt_path: Path) -> List[Dict[str, Any]]:
     """
-    One observation per phase value.
-    Keys: id, bus, phase, conn, kw, kvar, status, cust_type
+    Build observations per declared phase.
+    We do NOT drop zero values here; grouping decides whether to keep zero-only devices,
+    so loads with kW=0 still appear in the right table.
     """
     root = _read_xml(Path(txt_path))
     out: List[Dict[str, Any]] = []
@@ -230,38 +263,38 @@ def _parse_spot_loads_all(txt_path: Path) -> List[Dict[str, Any]]:
             continue
 
         section_id = (sec.findtext("./SectionID") or "").strip()
-        from_bus   = (sec.findtext("./FromNodeID") or "").strip()
-        # Always bind to FromNodeID → real network side
+        from_bus = (sec.findtext("./FromNodeID") or "").strip()
         if not from_bus:
             continue
 
-        dev_num    = (spot.findtext("./DeviceNumber") or "").strip()
-        conn_cfg   = (spot.findtext("./ConnectionConfiguration") or "").strip()
+        dev_num = (spot.findtext("./DeviceNumber") or "").strip()
+        conn_cfg = (spot.findtext("./ConnectionConfiguration") or "").strip()
         status_txt = (spot.findtext(".//CustomerLoad/ConnectionStatus") or "").strip().lower()
-        status     = 1 if status_txt == "connected" else 0
-
-        cust_type  = (spot.findtext(".//CustomerLoad/CustomerType") or "").strip()
+        status = 1 if status_txt == "connected" else 0
+        cust_type = (spot.findtext(".//CustomerLoad/CustomerType") or "").strip()
 
         load_id = _norm_load_id(dev_num, section_id, from_bus)
 
         for val in spot.findall(".//CustomerLoadValue"):
-            ph = (val.findtext("./Phase") or "").strip().upper()
-            if ph not in PHASES:
+            phases = _expand_phases(val.findtext("./Phase"))
+            if not phases:
                 continue
             kw, kvar = _kw_kvar_from_value(val)
-            if kw is None and kvar is None:
-                continue
-
-            out.append({
-                "id": load_id,
-                "bus": from_bus,
-                "phase": ph,
-                "conn": conn_cfg,
-                "kw": float(kw or 0.0),
-                "kvar": float(kvar or 0.0),
-                "status": status,
-                "cust_type": cust_type,
-            })
+            # Split evenly when the original row was aggregated
+            share_p = float((kw or 0.0) / len(phases))
+            share_q = float((kvar or 0.0) / len(phases))
+            for p in phases:
+                out.append({
+                    "id": load_id,
+                    "bus": from_bus,
+                    "phase": p,
+                    "conn": conn_cfg,
+                    "kw": share_p,
+                    "kvar": share_q,
+                    "status": status,
+                    "cust_type": cust_type,
+                    "declared": True,
+                })
 
     return out
 
@@ -271,39 +304,59 @@ def _parse_spot_loads_all(txt_path: Path) -> List[Dict[str, Any]]:
 # -----------------------
 def _group_by_device(observations: List[Dict[str, Any]]):
     acc: Dict[str, Dict[str, Dict[str, float]]] = {}
+    declared: Dict[str, Set[str]] = {}
     meta: Dict[str, Dict[str, Any]] = {}
 
     for o in observations:
-        lid = o["id"]; ph = o["phase"]
+        lid = o["id"]
+        ph = o["phase"]
         acc.setdefault(lid, {})
         acc[lid].setdefault(ph, {"kw": 0.0, "kvar": 0.0})
-        acc[lid][ph]["kw"]   += o["kw"]
+        acc[lid][ph]["kw"] += o["kw"]
         acc[lid][ph]["kvar"] += o["kvar"]
+        declared.setdefault(lid, set()).add(ph)
         meta[lid] = {"bus": o["bus"], "conn": o["conn"], "status": o["status"], "cust_type": o["cust_type"]}
 
     single, two, three = [], [], []
     for lid, phase_map in acc.items():
-        phases = sorted(phase_map.keys(), key=lambda p: PHASES.index(p))
+        nz_phases = [p for p in PHASES
+                     if abs(phase_map.get(p, {}).get("kw", 0.0)) > EPS
+                     or abs(phase_map.get(p, {}).get("kvar", 0.0)) > EPS]
+
+        # If all powers are ~0, fall back to the declared phase set so the device still appears.
+        phases_used = nz_phases if nz_phases else [p for p in PHASES if p in declared.get(lid, set())]
+        if not phases_used:
+            continue
+
         m = meta[lid]
         base = {"ID": lid, "Status": m["status"], "Bus": m["bus"], "Conn": m["conn"], "CustType": m["cust_type"]}
 
-        if len(phases) == 1:
-            p = phases[0]
-            row = dict(base); row.update({"Phase": p, "P1": phase_map[p]["kw"], "Q1": phase_map[p]["kvar"]})
+        if len(phases_used) == 1:
+            p = phases_used[0]
+            row = dict(base)
+            row.update({"Phase": p,
+                        "P1": phase_map.get(p, {}).get("kw", 0.0),
+                        "Q1": phase_map.get(p, {}).get("kvar", 0.0)})
             single.append(row)
-        elif len(phases) == 2:
-            p1, p2 = phases[0], phases[1]
-            row = dict(base); row.update({
+
+        elif len(phases_used) == 2:
+            p1, p2 = phases_used[0], phases_used[1]
+            row = dict(base)
+            row.update({
                 "PhasePair": (p1, p2),
-                "P1": phase_map[p1]["kw"], "Q1": phase_map[p1]["kvar"],
-                "P2": phase_map[p2]["kw"], "Q2": phase_map[p2]["kvar"],
+                "P1": phase_map.get(p1, {}).get("kw", 0.0),
+                "Q1": phase_map.get(p1, {}).get("kvar", 0.0),
+                "P2": phase_map.get(p2, {}).get("kw", 0.0),
+                "Q2": phase_map.get(p2, {}).get("kvar", 0.0),
             })
             two.append(row)
-        elif len(phases) == 3:
-            row = dict(base); row.update({
-                "P_A": phase_map["A"]["kw"], "Q_A": phase_map["A"]["kvar"],
-                "P_B": phase_map["B"]["kw"], "Q_B": phase_map["B"]["kvar"],
-                "P_C": phase_map["C"]["kw"], "Q_C": phase_map["C"]["kvar"],
+
+        else:  # 3 phases
+            row = dict(base)
+            row.update({
+                "P_A": phase_map.get("A", {}).get("kw", 0.0), "Q_A": phase_map.get("A", {}).get("kvar", 0.0),
+                "P_B": phase_map.get("B", {}).get("kw", 0.0), "Q_B": phase_map.get("B", {}).get("kvar", 0.0),
+                "P_C": phase_map.get("C", {}).get("kw", 0.0), "Q_C": phase_map.get("C", {}).get("kvar", 0.0),
             })
             three.append(row)
 
@@ -319,7 +372,7 @@ def _zip_flags(cust_type: str) -> tuple[int, int, int]:
         return 1, 0, 0
     if t.startswith("I"):
         return 0, 1, 0
-    return 0, 0, 1
+    return 0, 0, 1  # default to constant power
 
 
 # =======================
@@ -371,7 +424,7 @@ def write_load_sheet(xw, input_path: Path) -> None:
     ws.write_url(4, 0, f"internal:'Load'!A{b4_h+1}:L{b4_e+1}", link_fmt, "SinglePhaseZIPLoad")
     ws.write_url(5, 0, f"internal:'Load'!A{b5_h+1}:O{b5_e+1}", link_fmt, "TwoPhaseZIPLoad")
 
-    # Notes (rows 8–10), merged A:H
+    # Notes
     ws.merge_range(7, 0, 7, 7, "Important notes:", notes_hdr)
     ws.merge_range(8, 0, 8, 7, "Default order of blocks and columns after row 11 must not change", notes_txt)
     ws.merge_range(9, 0, 9, 7, "One empty row between End of each block and the next block is mandatory; otherwise, empty rows are NOT allowed", notes_txt)
@@ -394,7 +447,7 @@ def write_load_sheet(xw, input_path: Path) -> None:
     ws.write_row(b3_h, 0, ["ID", "Status", "Bus", "P (MW)", "Q (MVAr)"], th)
     ws.merge_range(b3_e, 0, b3_e, 2, "End of Positive-Sequence Constant Current Load")
 
-    # -------- Block 4: Single-Phase ZIP (parsed) --------
+    # -------- Block 4: Single-Phase ZIP --------
     ws.merge_range(b4_t, 0, b4_t, 1, "Single-Phase ZIP Load", bold)
     ws.write_url(b4_t, 2, "internal:'Load'!A1", link_fmt, "Go to Type List")
     ws.write_row(
@@ -418,13 +471,13 @@ def write_load_sheet(xw, input_path: Path) -> None:
         ws.write_number(rcur, 6, ki, num0)
         ws.write_number(rcur, 7, kp, num0)
         ws.write_number(rcur, 8, 0, num0)
-        ws.write(rcur, 9,  f"{bus}{PHASE_SUFFIX.get(row['Phase'], '')}")
+        ws.write(rcur, 9, f"{bus}{PHASE_SUFFIX.get(row['Phase'], '')}")
         ws.write_number(rcur, 10, row["P1"], num0)
         ws.write_number(rcur, 11, row["Q1"], num0)
         rcur += 1
     ws.merge_range(b4_e, 0, b4_e, 1, "End of SinglePhase ZIP Load")
 
-    # -------- Block 5: Two-Phase ZIP (parsed) --------
+    # -------- Block 5: Two-Phase ZIP --------
     ws.merge_range(b5_t, 0, b5_t, 1, "Two-Phase ZIP Load", bold)
     ws.write_url(b5_t, 2, "internal:'Load'!A1", link_fmt, "Go to Type List")
     ws.write_row(
@@ -452,7 +505,7 @@ def write_load_sheet(xw, input_path: Path) -> None:
         rcur += 1
     ws.merge_range(b5_e, 0, b5_e, 1, "End of TwoPhase ZIP Load")
 
-    # -------- Block 6: Three-Phase ZIP (parsed) --------
+    # -------- Block 6: Three-Phase ZIP --------
     ws.merge_range(b6_t, 0, b6_t, 1, "Three-Phase ZIP Load", bold)
     ws.write_url(b6_t, 2, "internal:'Load'!A1", link_fmt, "Go to Type List")
     ws.write_row(

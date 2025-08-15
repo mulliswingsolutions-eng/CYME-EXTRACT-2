@@ -2,26 +2,47 @@
 from __future__ import annotations
 from pathlib import Path
 import xml.etree.ElementTree as ET
-from typing import Dict, List, Tuple, Any
+from typing import Dict, List, Tuple, Any, Optional
+
+
+# ------------------------
+# Small helpers
+# ------------------------
+def _t(x: Optional[str]) -> str:
+    return "" if x is None else x.strip()
+
+def _f(x: Optional[str]) -> Optional[float]:
+    try:
+        if x is None:
+            return None
+        xs = x.strip()
+        if xs == "":
+            return None
+        # handle "330deg" / "30°" patterns if ever needed
+        if xs.lower().endswith("deg"):
+            xs = xs[:-3]
+        return float(xs)
+    except Exception:
+        return None
 
 
 def _phase_count(phase_str: str) -> int:
     s = (phase_str or "").upper()
-    return len({p for p in s if p in "ABC"}) or 3
+    ph = {p for p in s if p in "ABC"}
+    return len(ph) if ph else 3
 
 
 def _decode_conn(code: str) -> Tuple[str, str]:
     """
     Map CYME connection string to (primary, secondary) textual forms.
-    Examples:
-        "Yg_Yg", "Y_Y", "Y_D", "Yg_D", "D_Y", "D_D"
-    We report only topology (wye/delta), not grounding.
+    e.g. "Yg_Yg", "Y_D", "D_Yg", "D_Y"
+    Only topology is reported (wye / delta).
     """
     if not code:
-        return "wye", "wye"
+        return "",""
     parts = code.replace("-", "_").split("_")
     if len(parts) < 2:
-        return "wye", "wye"
+        parts = (parts + [""])[:2]
 
     def one(s: str) -> str:
         s = s.upper()
@@ -29,7 +50,7 @@ def _decode_conn(code: str) -> Tuple[str, str]:
             return "delta"
         if s.startswith("Y"):
             return "wye"
-        return "wye"
+        return ""
 
     return one(parts[0]), one(parts[1])
 
@@ -42,20 +63,21 @@ def _bus_labels(bus: str, phase_str: str) -> Tuple[str, str, str]:
     return tuple(labs)
 
 
-def _compute_x_rw(z_percent: float, xr_ratio: float) -> Tuple[float, float, float]:
+def _compute_x_rw(z_percent: Optional[float],
+                  xr_ratio: Optional[float]) -> Tuple[Optional[float], Optional[float], Optional[float]]:
     """
     From PositiveSequenceImpedancePercent (Z%) and XRRatio, compute:
-      - X (pu)
-      - RW1 (pu) and RW2 (pu): split total R equally
+      X (pu), RW1 (pu), RW2 (pu).  If inputs missing/invalid → all None.
     """
+    if z_percent is None or xr_ratio is None:
+        return None, None, None
     try:
         z_pu = float(z_percent) / 100.0
         xr = float(xr_ratio)
     except Exception:
-        return 0.0, 0.0, 0.0
-
+        return None, None, None
     if z_pu <= 0 or xr <= 0:
-        return 0.0, 0.0, 0.0
+        return None, None, None
 
     denom = (1.0 + xr * xr) ** 0.5
     r_total = z_pu / denom
@@ -64,38 +86,77 @@ def _compute_x_rw(z_percent: float, xr_ratio: float) -> Tuple[float, float, floa
     return round(x_pu, 5), round(rw, 8), round(rw, 8)
 
 
+# ------------------------
+# Read TransformerDB
+# ------------------------
 def _read_transformer_db(root: ET.Element) -> Dict[str, Dict[str, Any]]:
     """
     TransformerDB block: key by EquipmentID.
-    Fields used:
-      PrimaryVoltage, SecondaryVoltage, NominalRatingKVA,
-      PositiveSequenceImpedancePercent, XRRatio, TransformerConnection
+    We pick only what we actually need; anything not present stays None.
     """
     out: Dict[str, Dict[str, Any]] = {}
     for tdb in root.findall(".//TransformerDB"):
-        eid = (tdb.findtext("EquipmentID") or "").strip()
+        eid = _t(tdb.findtext("EquipmentID"))
         if not eid:
             continue
 
-        def f(name: str) -> str:
-            v = tdb.findtext(name)
-            return "" if v is None else v.strip()
+        kvp = _f(tdb.findtext("PrimaryVoltage")) or _f(tdb.findtext("PrimaryKV"))
+        kvs = _f(tdb.findtext("SecondaryVoltage")) or _f(tdb.findtext("SecondaryKV"))
+        kva = _f(tdb.findtext("NominalRatingKVA")) or _f(tdb.findtext("NominalRating"))
+        zpct = _f(tdb.findtext("PositiveSequenceImpedancePercent"))
+        xr   = _f(tdb.findtext("XRRatio"))
+        conn = _t(tdb.findtext("TransformerConnection") or tdb.findtext("Connection"))
 
         out[eid] = {
-            "kvp": float(f("PrimaryVoltage") or 0) or float(f("PrimaryKV") or 0),
-            "kvs": float(f("SecondaryVoltage") or 0) or float(f("SecondaryKV") or 0),
-            "kva": float(f("NominalRatingKVA") or 0) or float(f("NominalRating") or 0),
-            "z_pct": float(f("PositiveSequenceImpedancePercent") or 0),
-            "xr": float(f("XRRatio") or 0),
-            "conn": f("TransformerConnection") or f("Connection"),
+            "kvp": kvp, "kvs": kvs, "kva": kva,
+            "z_pct": zpct, "xr": xr, "conn": conn,
         }
     return out
 
 
+# ------------------------
+# Parse sections → rows
+# ------------------------
+def _ltc_fields(xf: ET.Element) -> Dict[str, Optional[float]]:
+    """
+    Pull every tap/range value we can find; leave None when absent.
+    - Tap 1/2/3: Primary/Secondary/TertiaryTapSettingPercent
+      (fallback to <LTCSettings>/<TapSetting> for Tap 2 if side is Secondary)
+    - Min/Max Range (%): map Buck/Boost when present
+    - Lowest/Highest Tap: look for the common names; if not found → None
+    """
+    # Tap settings by winding (percent)
+    tap1 = _f(xf.findtext("PrimaryTapSettingPercent"))
+    tap2 = _f(xf.findtext("SecondaryTapSettingPercent"))
+    tap3 = _f(xf.findtext("TertiaryTapSettingPercent"))
+
+    # LTC block (optional)
+    ltc = xf.find("./LTCSettings")
+    tap_setting = _f(ltc.findtext("TapSetting")) if ltc is not None else None
+    boost = _f(ltc.findtext("Boost")) if ltc is not None else None
+    buck  = _f(ltc.findtext("Buck")) if ltc is not None else None
+
+    # If only an LTC TapSetting exists and no per-winding percentages were provided,
+    # it typically lives on the controlled side (often Secondary). Use it as Tap 2.
+    if tap2 is None and tap_setting is not None:
+        tap2 = tap_setting
+
+    # Try to locate explicit low/high tap fields if they exist in some datasets
+    # (we simply probe common names; if absent we leave None)
+    lowest  = _f(xf.findtext("LowestTap")) or _f(xf.findtext("LowestTapPosition"))
+    highest = _f(xf.findtext("HighestTap")) or _f(xf.findtext("HighestTapPosition"))
+
+    return {
+        "tap1": tap1, "tap2": tap2, "tap3": tap3,
+        "low": lowest, "high": highest,
+        "min_rng": buck, "max_rng": boost,
+    }
+
+
 def _parse_multiphase_2w_rows(input_path: Path) -> List[List[Any]]:
     """
-    Parse <Section><Devices><Transformer> entries and build the Multiphase 2W rows.
-    No synthetic rows added—only what exists in the file.
+    Parse <Section><Devices><Transformer> entries and build Multiphase 2W rows.
+    No defaults are injected; missing data → empty cells.
     """
     root = ET.fromstring(input_path.read_text(encoding="utf-8", errors="ignore"))
     tdb = _read_transformer_db(root)
@@ -107,27 +168,32 @@ def _parse_multiphase_2w_rows(input_path: Path) -> List[List[Any]]:
         if xf is None:
             continue
 
-        from_bus = (sec.findtext("FromNodeID") or "").strip()
-        to_bus   = (sec.findtext("ToNodeID") or "").strip()
-        phase    = (sec.findtext("Phase") or "ABC").strip().upper()
-        status_text = (xf.findtext("ConnectionStatus") or "Connected").strip().lower()
-        status      = 1 if status_text == "connected" else 0
-        dev_id = (xf.findtext("DeviceID") or "").strip()
+        from_bus = _t(sec.findtext("FromNodeID"))
+        to_bus   = _t(sec.findtext("ToNodeID"))
+        phase    = _t(sec.findtext("Phase") or "ABC").upper()
 
-        # Section-level connection is authoritative; fall back to DB if absent
-        conn_code = (xf.findtext("TransformerConnection") or "").strip()
+        status_text = _t(xf.findtext("ConnectionStatus") or "Connected").lower()
+        status = 1 if status_text == "connected" else 0
+
+        dev_id = _t(xf.findtext("DeviceID"))
+
+        # Connection type (prefer section value, else DB)
+        conn_code = _t(xf.findtext("TransformerConnection"))
         if not conn_code and dev_id in tdb:
-            conn_code = tdb[dev_id].get("conn") or ""
+            conn_code = _t(tdb[dev_id].get("conn"))
         conn_p, conn_s = _decode_conn(conn_code)
 
-        # Lookup ratings/impedance in DB
+        # Ratings / impedance from DB
         info = tdb.get(dev_id, {})
-        kvp  = float(info.get("kvp") or 0.0)
-        kvs  = float(info.get("kvs") or 0.0)
-        kva  = float(info.get("kva") or 0.0)
-        x_pu, rw1, rw2 = _compute_x_rw(info.get("z_pct", 0.0), info.get("xr", 0.0))
+        kvp  = info.get("kvp")
+        kvs  = info.get("kvs")
+        kva  = info.get("kva")
+        x_pu, rw1, rw2 = _compute_x_rw(info.get("z_pct"), info.get("xr"))
 
-        # Labels with phases
+        # Tap / ranges from device
+        taps = _ltc_fields(xf)
+
+        # Bus labels (respect the stated phases)
         b1a, b1b, b1c = _bus_labels(from_bus, phase)
         b2a, b2b, b2c = _bus_labels(to_bus, phase)
 
@@ -136,21 +202,23 @@ def _parse_multiphase_2w_rows(input_path: Path) -> List[List[Any]]:
             rid, status, _phase_count(phase),
             b1a, b1b, b1c, kvp, kva, conn_p,
             b2a, b2b, b2c, kvs, kva, conn_s,
-            0, 0, 0, -16, 16, 10, 10,
+            taps["tap1"], taps["tap2"], taps["tap3"],
+            taps["low"], taps["high"],
+            taps["min_rng"], taps["max_rng"],
             x_pu, rw1, rw2
         ])
 
     return rows
 
 
+# ------------------------
+# Sheet writer
+# ------------------------
 def write_transformer_sheet(xw, input_path: Path) -> None:
     """
-    Build the 'Transformer' sheet with the same layout rules as other pages.
-    - Notes start at row 8 (merged A:H)
-    - Blocks start on row 11
-    - Titles merged A:D, 'Go to Type List' in column E (links to A1)
-    - One blank row between blocks
-    - Top 'Type' links select the full table ranges.
+    Build the 'Transformer' sheet.
+    Absolutely no hard-coded engineering values are inserted:
+    if a datum is missing in the file/DB, the cell is left blank.
     """
     wb = xw.book
     ws = wb.add_worksheet("Transformer")
@@ -161,36 +229,35 @@ def write_transformer_sheet(xw, input_path: Path) -> None:
     link_fmt = wb.add_format({"font_color": "blue", "underline": 1})
     notes_hdr = wb.add_format({"bold": True, "font_color": "yellow", "bg_color": "#595959", "align": "left"})
     notes_txt = wb.add_format({"font_color": "yellow", "bg_color": "#595959"})
-    th = wb.add_format({"bold": True, "bottom": 1})
-    num2 = wb.add_format({"num_format": "0.00"})
-    num5 = wb.add_format({"num_format": "0.00000"})
-    num8 = wb.add_format({"num_format": "0.00000000"})
-    int0 = wb.add_format({"num_format": "0"})
+    th   = wb.add_format({"bold": True, "bottom": 1})
+    f0   = wb.add_format({"num_format": "0"})
+    f2   = wb.add_format({"num_format": "0.00"})
+    f5   = wb.add_format({"num_format": "0.00000"})
+    f8   = wb.add_format({"num_format": "0.00000000"})
 
     # Column widths
-    widths = [22, 8, 16, 12, 12, 12, 8, 12, 10, 12, 12, 12, 8, 12, 10,
-              8, 8, 8, 12, 12, 14, 14, 10, 12, 12, 12, 12, 12, 14, 14]
+    widths = [22, 8, 16, 12, 12, 12, 8, 12, 12, 12, 12, 12, 8, 12, 12,
+              10, 10, 10, 12, 12, 14, 14, 10, 12, 12]
     for c, w in enumerate(widths):
         ws.set_column(c, c, w)
 
-    # Data rows
+    # Data
     rows_mp2w = _parse_multiphase_2w_rows(input_path)
 
-    # Anchors (blocks start at row 11)
+    # Anchors
     r = 10
     b1_t, b1_h, b1_e = r, r+1, r+2; r = b1_e + 2                # PosSeq 2W (empty)
     b2_t, b2_h, b2_e = r, r+1, r+2; r = b2_e + 2                # PosSeq 3W (empty)
     b3_t, b3_h, b3_first = r, r+1, r+2; b3_e = b3_first + len(rows_mp2w); r = b3_e + 2
-    b4_t, b4_h, b4_e = r, r+1, r+2                               # MP 2W w/ Mutual (empty)
+    b4_t, b4_h, b4_e = r, r+1, r+2                               # MP 2W with Mutual (empty)
 
-    # Type links
+    # Top links + notes
     ws.write(0, 0, "Type", bold)
     ws.write_url(1, 0, f"internal:'Transformer'!A{b1_h+1}:K{b1_e+1}", link_fmt, "PositiveSeq2wXF")
     ws.write_url(2, 0, f"internal:'Transformer'!A{b2_h+1}:S{b2_e+1}", link_fmt, "PositiveSeq3wXF")
     ws.write_url(3, 0, f"internal:'Transformer'!A{b3_h+1}:Y{b3_e+1}", link_fmt, "Multiphase2wXF")
     ws.write_url(4, 0, f"internal:'Transformer'!A{b4_h+1}:AA{b4_e+1}", link_fmt, "Multiphase2wXFMutual")
 
-    # Notes
     ws.merge_range(7, 0, 7, 7, "Important notes:", notes_hdr)
     ws.merge_range(8, 0, 8, 7, "Default order of blocks and columns after row 11 must not change", notes_txt)
     ws.merge_range(9, 0, 9, 7, "One empty row between End of each block and the next block is mandatory; otherwise, empty rows are NOT allowed", notes_txt)
@@ -224,24 +291,44 @@ def write_transformer_sheet(xw, input_path: Path) -> None:
 
     rr = b3_first
     for row in rows_mp2w:
-        ws.write(rr, 0, row[0])
-        ws.write_number(rr, 1, row[1], int0)
-        ws.write_number(rr, 2, row[2], int0)
+        # helper to write optional numbers / text
+        def wnum(c, v, fmt):
+            if v is None or v == "":
+                ws.write(rr, c, "")
+            else:
+                ws.write_number(rr, c, v, fmt)
+
+        ws.write(rr, 0, row[0])                 # ID
+        wnum(1, row[1], f0)                     # Status
+        wnum(2, row[2], f0)                     # Number of phases
+
         ws.write(rr, 3, row[3]); ws.write(rr, 4, row[4]); ws.write(rr, 5, row[5])
-        ws.write_number(rr, 6, row[6], num2); ws.write_number(rr, 7, row[7], num2); ws.write(rr, 8, row[8])
+        wnum(6,  row[6],  f2)                   # Vp
+        wnum(7,  row[7],  f2)                   # Sbase p
+        ws.write(rr, 8, row[8])                 # Conn p
+
         ws.write(rr, 9, row[9]); ws.write(rr,10, row[10]); ws.write(rr,11, row[11])
-        ws.write_number(rr,12, row[12], num2); ws.write_number(rr,13, row[13], num2); ws.write(rr,14, row[14])
-        ws.write_number(rr,15, row[15], int0); ws.write_number(rr,16, row[16], int0); ws.write_number(rr,17, row[17], int0)
-        ws.write_number(rr,18, row[18], int0); ws.write_number(rr,19, row[19], int0)
-        ws.write_number(rr,20, row[20], int0); ws.write_number(rr,21, row[21], int0)
-        ws.write_number(rr,22, row[22], num5)
-        ws.write_number(rr,23, row[23], num8)
-        ws.write_number(rr,24, row[24], num8)
+        wnum(12, row[12], f2)                   # Vs
+        wnum(13, row[13], f2)                   # Sbase s
+        ws.write(rr,14, row[14])                # Conn s
+
+        wnum(15, row[15], f2)                   # Tap1
+        wnum(16, row[16], f2)                   # Tap2
+        wnum(17, row[17], f2)                   # Tap3
+        wnum(18, row[18], f2)                   # Lowest tap
+        wnum(19, row[19], f2)                   # Highest tap
+        wnum(20, row[20], f2)                   # Min range (%)
+        wnum(21, row[21], f2)                   # Max range (%)
+
+        wnum(22, row[22], f5)                   # X (pu)
+        wnum(23, row[23], f8)                   # RW1 (pu)
+        wnum(24, row[24], f8)                   # RW2 (pu)
+
         rr += 1
 
     ws.merge_range(b3_e, 0, b3_e, 3, "End of Multiphase 2W-Transformer")
 
-    # ---- Block 4: Multiphase 2W with Mutual (empty) ----
+    # ---- Block 4: Multiphase 2W with Mutual (template only) ----
     ws.merge_range(b4_t, 0, b4_t, 2, "Multiphase 2W-Transformer with Mutual Impedance", bold)
     ws.write_url(b4_t, 3, go_top, link_fmt, "Go to Type List")
     ws.write_row(
