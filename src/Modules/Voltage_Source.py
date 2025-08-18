@@ -75,11 +75,41 @@ def _pick_sc_capacities(eq: ET.Element | None, src: ET.Element) -> Optional[Dict
     return {"SC1ph": v, "SC3ph": v}
 
 
+def _gather_sources(root: ET.Element) -> List[ET.Element]:
+    """
+    Prefer sources under Topo blocks whose NetworkType == 'Substation'.
+    Ignore Topo blocks that are Feeders (and those with EquivalentMode == 1).
+    If no Topo/Substation is found, fall back to scanning all .//Sources/Source.
+    """
+    picked: List[ET.Element] = []
+
+    topo_nodes = root.findall(".//Topo")
+    for topo in topo_nodes:
+        ntype = (topo.findtext("NetworkType") or "").strip().lower()
+        eq_mode = (topo.findtext("EquivalentMode") or "").strip()
+        if ntype != "substation":
+            continue
+        if eq_mode == "1":
+            # Substation wrapper marked as 'equivalent' – skip (defensive)
+            continue
+        srcs_parent = topo.find("./Sources")
+        if srcs_parent is None:
+            continue
+        picked.extend(srcs_parent.findall("./Source"))
+
+    if picked:
+        return picked
+
+    # Backwards compatibility: some files may not wrap in <Topo>
+    return root.findall(".//Sources/Source")
+
+
 def _parse_voltage_sources(path: Path) -> tuple[list[dict], list[dict]]:
     """
     Returns (sc_rows, seq_rows):
       - sc_rows  -> Short-Circuit Level Data rows
       - seq_rows -> Sequential Data rows
+    Only includes sources from Topo blocks where NetworkType == 'Substation'.
     """
     txt = path.read_text(encoding="utf-8", errors="ignore")
     root = ET.fromstring(txt)
@@ -87,70 +117,69 @@ def _parse_voltage_sources(path: Path) -> tuple[list[dict], list[dict]]:
     sc_rows: List[Dict[str, Any]] = []
     seq_rows: List[Dict[str, Any]] = []
 
-    for sources in root.findall(".//Sources"):
-        for src in sources.findall("./Source"):
-            node = (src.findtext("./SourceNodeID") or "").strip()
-            if not node:
+    for src in _gather_sources(root):
+        node = (src.findtext("./SourceNodeID") or "").strip()
+        if not node:
+            continue
+
+        models = src.findall("./EquivalentSourceModels/EquivalentSourceModel")
+        if not models:
+            models = [src]
+
+        for idx, mdl in enumerate(models, start=1):
+            eq = mdl.find("./EquivalentSource")
+
+            kvll = (
+                (eq.findtext("KVLL") if eq is not None else None)
+                or mdl.findtext("KVLL")
+                or src.findtext("KVLL")
+            )
+            kV = _f(kvll)
+            if kV is None:
                 continue
 
-            models = src.findall("./EquivalentSourceModels/EquivalentSourceModel")
-            if not models:
-                models = [src]
+            # Angle default: 0.0 if not provided (no offset)
+            angle_a = (
+                _f(eq.findtext("OperatingAngle1")) if eq is not None else None
+            ) or _f(mdl.findtext("OperatingAngle1")) or _f(src.findtext("OperatingAngle1"))
+            if angle_a is None:
+                angle_a = 0.0
 
-            for idx, mdl in enumerate(models, start=1):
-                eq = mdl.find("./EquivalentSource")
+            sid = _get_source_id(src, node, model_index=idx if len(models) > 1 else None)
 
-                kvll = (
-                    (eq.findtext("KVLL") if eq is not None else None)
-                    or mdl.findtext("KVLL")
-                    or src.findtext("KVLL")
+            seq = _pick_seq_impedances(eq, src)
+            if seq:
+                seq_rows.append(
+                    {
+                        "ID": sid,
+                        "Bus1": f"{node}_a",
+                        "Bus2": f"{node}_b",
+                        "Bus3": f"{node}_c",
+                        "kV": kV,
+                        "Angle_a": float(angle_a),
+                        "R1": seq["R1"], "X1": seq["X1"], "R0": seq["R0"], "X0": seq["X0"],
+                    }
                 )
-                kV = _f(kvll)
-                if kV is None:
-                    continue
+            else:
+                caps = _pick_sc_capacities(eq, src)
+                sc1 = 200000.0
+                sc3 = 200000.0
+                if caps:
+                    sc1 = caps["SC1ph"]
+                    sc3 = caps["SC3ph"]
 
-                # Angle default: 0.0 if not provided (no offset)
-                angle_a = (
-                    _f(eq.findtext("OperatingAngle1")) if eq is not None else None
-                ) or _f(mdl.findtext("OperatingAngle1")) or _f(src.findtext("OperatingAngle1"))
-                if angle_a is None:
-                    angle_a = 0.0
-
-                sid = _get_source_id(src, node, model_index=idx if len(models) > 1 else None)
-
-                seq = _pick_seq_impedances(eq, src)
-                if seq:
-                    seq_rows.append(
-                        {
-                            "ID": sid,
-                            "Bus1": f"{node}_a",
-                            "Bus2": f"{node}_b",
-                            "Bus3": f"{node}_c",
-                            "kV": kV,
-                            "Angle_a": float(angle_a),
-                            "R1": seq["R1"], "X1": seq["X1"], "R0": seq["R0"], "X0": seq["X0"],
-                        }
-                    )
-                else:
-                    caps = _pick_sc_capacities(eq, src)
-                    sc1 = 200000.0
-                    sc3 = 200000.0
-                    if caps:
-                        sc1 = caps["SC1ph"]
-                        sc3 = caps["SC3ph"]
-
-                    sc_rows.append(
-                        {
-                            "ID": sid,
-                            "Bus1": f"{node}_a",
-                            "Bus2": f"{node}_b",
-                            "Bus3": f"{node}_c",
-                            "kV": kV,
-                            "Angle_a": float(angle_a),
-                            "SC1ph": sc1,
-                            "SC3ph": sc3,
-                        }
-                    )
+                sc_rows.append(
+                    {
+                        "ID": sid,
+                        "Bus1": f"{node}_a",
+                        "Bus2": f"{node}_b",
+                        "Bus3": f"{node}_c",
+                        "kV": kV,
+                        "Angle_a": float(angle_a),
+                        "SC1ph": sc1,
+                        "SC3ph": sc3,
+                    }
+                )
 
     return sc_rows, seq_rows
 
@@ -229,7 +258,7 @@ def write_voltage_source_sheet(xw, input_path: Path) -> None:
         ws.write(rcur, 2, s["Bus2"])
         ws.write(rcur, 3, s["Bus3"])
         ws.write_number(rcur, 4, float(s["kV"]), num)
-        ws.write_number(rcur, 5, float(s["Angle_a"]), num)  # <- always write a number (0.0 if no offset)
+        ws.write_number(rcur, 5, float(s["Angle_a"]), num)  # 0.0 if no offset
         ws.write_number(rcur, 6, float(s["SC1ph"]), num)
         ws.write_number(rcur, 7, float(s["SC3ph"]), num)
         rcur += 1
@@ -250,7 +279,7 @@ def write_voltage_source_sheet(xw, input_path: Path) -> None:
         ws.write(rcur, 2, s["Bus2"])
         ws.write(rcur, 3, s["Bus3"])
         ws.write_number(rcur, 4, float(s["kV"]), num)
-        ws.write_number(rcur, 5, float(s["Angle_a"]), num)  # <- always 0.0 if none
+        ws.write_number(rcur, 5, float(s["Angle_a"]), num)  # 0.0 if none
         ws.write_number(rcur, 6, float(s["R1"]), num)
         ws.write_number(rcur, 7, float(s["X1"]), num)
         ws.write_number(rcur, 8, float(s["R0"]), num)

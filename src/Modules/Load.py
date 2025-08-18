@@ -366,13 +366,14 @@ def _group_by_device(observations: List[Dict[str, Any]]):
 # -----------------------
 # ZIP flags
 # -----------------------
-def _zip_flags(cust_type: str) -> tuple[int, int, int]:
-    t = (cust_type or "").upper()
-    if t.startswith("Z"):
-        return 1, 0, 0
-    if t.startswith("I"):
-        return 0, 1, 0
-    return 0, 0, 1  # default to constant power
+def _zip_flags(cust_type: str, load_value_type: str | None = None) -> tuple[int,int,int]:
+    lvt = (load_value_type or "").upper()
+    if lvt in ("KW_PF", "KW_KVAR"):
+        return 0, 0, 1   # constant power
+    if lvt in ("KVA_PF", "KVA_KVAR"):
+        return 0, 1, 0   # (only if you really want a rule like this)
+    return 0, 0, 1
+
 
 
 # =======================
