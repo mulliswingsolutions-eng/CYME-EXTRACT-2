@@ -1,9 +1,8 @@
 # To change:
 # 1. Remove 12.47 Feeders as sources (done)
 # 2. Check out constant current loads (done)
-# 3. Double check load values
-# 4. Include missing transformers
-# 5. Number of taps on transformers (32)
+# 3. Double check load values (Done)
+# 5. Number of taps on transformers (Done)
 
 # src/main.py
 from __future__ import annotations

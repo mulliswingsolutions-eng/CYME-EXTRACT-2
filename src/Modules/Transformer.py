@@ -11,6 +11,7 @@ from typing import Dict, List, Tuple, Any, Optional
 def _t(x: Optional[str]) -> str:
     return "" if x is None else x.strip()
 
+
 def _f(x: Optional[str]) -> Optional[float]:
     try:
         if x is None:
@@ -39,7 +40,7 @@ def _decode_conn(code: str) -> Tuple[str, str]:
     Only topology is reported (wye / delta).
     """
     if not code:
-        return "",""
+        return "", ""
     parts = code.replace("-", "_").split("_")
     if len(parts) < 2:
         parts = (parts + [""])[:2]
@@ -86,6 +87,27 @@ def _compute_x_rw(z_percent: Optional[float],
     return round(x_pu, 5), round(rw, 8), round(rw, 8)
 
 
+def _bounds_from_ntaps(ntaps: Optional[float]) -> tuple[Optional[int], Optional[int]]:
+    """
+    Symmetric bounds around 0 based on number of taps.
+    Examples:
+      16 -> (-8, +8)
+      17 -> (-8, +8)
+       1 -> (0, 0)
+    Returns (low, high) as integers, or (None, None) if unavailable.
+    """
+    if ntaps is None:
+        return None, None
+    try:
+        n = int(round(float(ntaps)))
+    except Exception:
+        return None, None
+    if n <= 0:
+        return None, None
+    half = n // 2
+    return -half, half
+
+
 # ------------------------
 # Read TransformerDB
 # ------------------------
@@ -107,9 +129,16 @@ def _read_transformer_db(root: ET.Element) -> Dict[str, Dict[str, Any]]:
         xr   = _f(tdb.findtext("XRRatio"))
         conn = _t(tdb.findtext("TransformerConnection") or tdb.findtext("Connection"))
 
+        # Pull LTC info from DB
+        ltc = tdb.find("./LoadTapChanger")
+        ntaps  = _f(ltc.findtext("NumberOfTaps")) if ltc is not None else None
+        minreg = _f(ltc.findtext("MinimumRegulationRange")) if ltc is not None else None
+        maxreg = _f(ltc.findtext("MaximumRegulationRange")) if ltc is not None else None
+
         out[eid] = {
             "kvp": kvp, "kvs": kvs, "kva": kva,
             "z_pct": zpct, "xr": xr, "conn": conn,
+            "ntaps": ntaps, "minreg": minreg, "maxreg": maxreg,
         }
     return out
 
@@ -141,8 +170,7 @@ def _ltc_fields(xf: ET.Element) -> Dict[str, Optional[float]]:
     if tap2 is None and tap_setting is not None:
         tap2 = tap_setting
 
-    # Try to locate explicit low/high tap fields if they exist in some datasets
-    # (we simply probe common names; if absent we leave None)
+    # Try to locate explicit low/high tap fields if they exist
     lowest  = _f(xf.findtext("LowestTap")) or _f(xf.findtext("LowestTapPosition"))
     highest = _f(xf.findtext("HighestTap")) or _f(xf.findtext("HighestTapPosition"))
 
@@ -192,6 +220,19 @@ def _parse_multiphase_2w_rows(input_path: Path) -> List[List[Any]]:
 
         # Tap / ranges from device
         taps = _ltc_fields(xf)
+
+        # If Lowest/Highest not on the device, compute from DB NumberOfTaps
+        low_db, high_db = _bounds_from_ntaps(info.get("ntaps"))
+        if taps["low"] is None and low_db is not None:
+            taps["low"] = low_db
+        if taps["high"] is None and high_db is not None:
+            taps["high"] = high_db
+
+        # If Min/Max Range (%) not on the device, use DB regulation ranges
+        if taps["min_rng"] is None:
+            taps["min_rng"] = info.get("minreg")
+        if taps["max_rng"] is None:
+            taps["max_rng"] = info.get("maxreg")
 
         # Bus labels (respect the stated phases)
         b1a, b1b, b1c = _bus_labels(from_bus, phase)
