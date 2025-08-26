@@ -2,6 +2,7 @@
 from __future__ import annotations
 from pathlib import Path
 from typing import Dict, List, Set
+import re
 import xml.etree.ElementTree as ET
 
 PHASES = ("A", "B", "C")
@@ -9,6 +10,19 @@ PHASES = ("A", "B", "C")
 
 def _read_xml(path: Path) -> ET.Element:
     return ET.fromstring(path.read_text(encoding="utf-8", errors="ignore"))
+
+
+# ---------- NEW: name sanitizer (removes '-' and any non [A-Za-z0-9_]) ----------
+_SAFE_RE = re.compile(r"[^A-Za-z0-9_]+")
+
+def _safe_name(s: str | None) -> str:
+    """Return an identifier made of [A-Za-z0-9_] only (no hyphens)."""
+    s = (s or "").strip()
+    if not s:
+        return ""
+    s = _SAFE_RE.sub("_", s)      # replace disallowed chars (incl. '-') with _
+    s = re.sub(r"_+", "_", s)     # collapse repeats
+    return s.strip("_")           # trim leading/trailing _
 
 
 def _phase_set(s: str | None) -> Set[str]:
@@ -29,14 +43,14 @@ def _has_any(sec: ET.Element, tags: List[str]) -> bool:
 def _local_pseudos(sec: ET.Element) -> Set[str]:
     """Identifiers local to this section only (used to detect local pseudo 'To' nodes)."""
     pseudos: Set[str] = set()
-    sid = (sec.findtext("./SectionID") or "").strip()
+    sid = _safe_name(sec.findtext("./SectionID"))
     if sid:
         pseudos.add(sid)
     devs = sec.find("./Devices")
     if devs is not None:
         for dev in list(devs):
-            dn = (dev.findtext("DeviceNumber") or "").strip()
-            di = (dev.findtext("DeviceID") or "").strip()
+            dn = _safe_name(dev.findtext("DeviceNumber"))
+            di = _safe_name(dev.findtext("DeviceID"))
             if dn:
                 pseudos.add(dn)
             if di:
@@ -53,8 +67,8 @@ def _parse_bus_rows(input_path: Path) -> List[Dict]:
     """
     root = _read_xml(Path(input_path))
 
-    # --- Slack/source info ---
-    source_node = (root.findtext(".//Sources/Source/SourceNodeID") or "").strip()
+    # --- Slack/source info (sanitize node id) ---
+    source_node = _safe_name(root.findtext(".//Sources/Source/SourceNodeID"))
 
     eq = root.find(
         ".//Sources/Source/EquivalentSourceModels/EquivalentSourceModel/EquivalentSource"
@@ -91,18 +105,20 @@ def _parse_bus_rows(input_path: Path) -> List[Dict]:
         "Switch", "Fuse", "Recloser", "Breaker", "Sectionalizer", "Isolator",
     ]
 
-    branch_endpoints: Set[str] = set()           # all From/To seen in branch sections
-    all_from_nodes: Set[str] = set()             # all FromNodeID across sections
-    device_terminal_candidates: Set[str] = set() # ToNodeID of SpotLoad/Shunt sections
+    branch_endpoints: Set[str] = set()           # all From/To seen in branch sections (sanitized)
+    all_from_nodes: Set[str] = set()             # all FromNodeID across sections (sanitized)
+    device_terminal_candidates: Set[str] = set() # ToNodeID of SpotLoad/Shunt sections (sanitized)
 
     # For branch-local pseudo detection:
     from_count: Dict[str, int] = {}
     to_count_nonlocal: Dict[str, int] = {}       # times a node is To in a section where it's NOT local pseudo
-    local_pseudo_to_candidates: Set[str] = set() # ToNodeIDs that equal local SectionID/DeviceNumber/DeviceID
+    local_pseudo_to_candidates: Set[str] = set() # ToNodeIDs equal to local SectionID/DeviceNumber/DeviceID (sanitized)
 
     for sec in root.findall(".//Sections/Section"):
-        f = (sec.findtext("./FromNodeID") or "").strip()
-        t = (sec.findtext("./ToNodeID") or "").strip()
+        f_raw = (sec.findtext("./FromNodeID") or "").strip()
+        t_raw = (sec.findtext("./ToNodeID") or "").strip()
+        f = _safe_name(f_raw)
+        t = _safe_name(t_raw)
 
         if f:
             all_from_nodes.add(f)
@@ -124,7 +140,7 @@ def _parse_bus_rows(input_path: Path) -> List[Dict]:
                 branch_endpoints.add(t)
             # local pseudo test for the To side of this branch
             if t:
-                lp = _local_pseudos(sec)
+                lp = _local_pseudos(sec)  # already sanitized inside
                 if t in lp:
                     local_pseudo_to_candidates.add(t)
                 else:
@@ -136,22 +152,17 @@ def _parse_bus_rows(input_path: Path) -> List[Dict]:
                 device_terminal_candidates.add(t)
 
     # Refined exclusions
-    # 1) Spot/Shunt terminals that never act as real endpoints anywhere
     terminal_exclusions_1: Set[str] = {
         n for n in device_terminal_candidates if n not in branch_endpoints and n not in all_from_nodes
     }
-
-    # 2) Branch-local pseudo "To" nodes that never appear as From anywhere
-    #    and never appear as a non-local To in any other section.
     terminal_exclusions_2: Set[str] = {
         n for n in local_pseudo_to_candidates if from_count.get(n, 0) == 0 and to_count_nonlocal.get(n, 0) == 0
     }
-
     terminal_exclusions: Set[str] = terminal_exclusions_1 | terminal_exclusions_2
 
     # -------- PASS 2: build node -> phases map with refined exclusions
     def _is_real_bus(nid: str | None) -> bool:
-        nid = (nid or "").strip()
+        nid = _safe_name(nid)
         if not nid:
             return False
         if nid in terminal_exclusions:
@@ -161,9 +172,10 @@ def _parse_bus_rows(input_path: Path) -> List[Dict]:
     node_phases: Dict[str, Set[str]] = {}
 
     def _add(nid: str | None, pstr: str) -> None:
+        nid = _safe_name(nid)
         if not _is_real_bus(nid):
             return
-        s = node_phases.setdefault((nid or "").strip(), set())
+        s = node_phases.setdefault(nid, set())
         s |= _phase_set(pstr)
 
     for sec in root.findall(".//Sections/Section"):
@@ -210,7 +222,7 @@ def _parse_bus_rows(input_path: Path) -> List[Dict]:
                     "Initial Vmag": v_ln,
                     "Unit": "V",
                     "Angle": phase_ang[ph],
-                    "Type": "Slack" if node == source_node else "PQ",
+                    "Type": "SLACK" if node == source_node else "PQ",
                 }
             )
     return rows

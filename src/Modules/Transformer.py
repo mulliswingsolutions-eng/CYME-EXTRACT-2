@@ -148,16 +148,16 @@ def _read_transformer_db(root: ET.Element) -> Dict[str, Dict[str, Any]]:
 # ------------------------
 def _ltc_fields(xf: ET.Element) -> Dict[str, Optional[float]]:
     """
-    Pull every tap/range value we can find; leave None when absent.
-    - Tap 1/2/3: Primary/Secondary/TertiaryTapSettingPercent
-      (fallback to <LTCSettings>/<TapSetting> for Tap 2 if side is Secondary)
-    - Min/Max Range (%): map Buck/Boost when present
-    - Lowest/Highest Tap: look for the common names; if not found → None
+    Pull tap/range values. Convert *_TapSettingPercent fields from % to pu.
     """
-    # Tap settings by winding (percent)
-    tap1 = _f(xf.findtext("PrimaryTapSettingPercent"))
-    tap2 = _f(xf.findtext("SecondaryTapSettingPercent"))
-    tap3 = _f(xf.findtext("TertiaryTapSettingPercent"))
+    # --- Tap settings by winding (percent → per-unit) ---
+    tap1_pct = _f(xf.findtext("PrimaryTapSettingPercent"))
+    tap2_pct = _f(xf.findtext("SecondaryTapSettingPercent"))
+    tap3_pct = _f(xf.findtext("TertiaryTapSettingPercent"))
+
+    tap1 = (tap1_pct / 100.0) if tap1_pct is not None else None
+    tap2 = (tap2_pct / 100.0) if tap2_pct is not None else None
+    tap3 = (tap3_pct / 100.0) if tap3_pct is not None else 1.0  # default 1.0 if tertiary missing
 
     # LTC block (optional)
     ltc = xf.find("./LTCSettings")
@@ -165,12 +165,10 @@ def _ltc_fields(xf: ET.Element) -> Dict[str, Optional[float]]:
     boost = _f(ltc.findtext("Boost")) if ltc is not None else None
     buck  = _f(ltc.findtext("Buck")) if ltc is not None else None
 
-    # If only an LTC TapSetting exists and no per-winding percentages were provided,
-    # it typically lives on the controlled side (often Secondary). Use it as Tap 2.
+    # If only LTC TapSetting exists (a position, not %), keep it as-is on Tap 2
     if tap2 is None and tap_setting is not None:
         tap2 = tap_setting
 
-    # Try to locate explicit low/high tap fields if they exist
     lowest  = _f(xf.findtext("LowestTap")) or _f(xf.findtext("LowestTapPosition"))
     highest = _f(xf.findtext("HighestTap")) or _f(xf.findtext("HighestTapPosition"))
 
@@ -179,7 +177,6 @@ def _ltc_fields(xf: ET.Element) -> Dict[str, Optional[float]]:
         "low": lowest, "high": highest,
         "min_rng": buck, "max_rng": boost,
     }
-
 
 def _parse_multiphase_2w_rows(input_path: Path) -> List[List[Any]]:
     """

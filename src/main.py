@@ -3,6 +3,10 @@
 # 2. Check out constant current loads (done)
 # 3. Double check load values (Done)
 # 5. Number of taps on transformers (Done)
+# 6. Missing taps on transformers (Done)
+# 7. SLACK needs to be capitalized (Done)
+# 8. No 0s in line data (Postponed)
+# 9. Remove all '-' 
 
 # src/main.py
 from __future__ import annotations
@@ -32,8 +36,17 @@ from Modules.Switch import write_switch_sheet
 #INPUT_PATH = Path(__file__).parent.parent / "Examples/Saint-John-CYME.txt"
 #OUTPUT_PATH = Path(__file__).parent.parent / "Outputs/CYME_Extract_Saint-John.xlsx"
 
-INPUT_PATH = Path(__file__).parent.parent / "Examples/UNB Feeder.txt"
-OUTPUT_PATH = Path(__file__).parent.parent / "Outputs/CYME_Extract_UNB.xlsx"
+#INPUT_PATH = Path(__file__).parent.parent / "Examples/UNB Feeder.txt"
+#OUTPUT_PATH = Path(__file__).parent.parent / "Outputs/CYME_Extract_UNB.xlsx"
+
+#INPUT_PATH = Path(__file__).parent.parent / "Examples/UNB Feeders_reduced.txt"
+#OUTPUT_PATH = Path(__file__).parent.parent / "Outputs/CYME_Extract_UNB_reduced.xlsx"
+
+#INPUT_PATH = Path(__file__).parent.parent / "Examples/UNB Feeders_reduced_aberdeen.txt"
+#OUTPUT_PATH = Path(__file__).parent.parent / "Outputs/CYME_Extract_UNB_reduced_aberdeen.xlsx"
+
+INPUT_PATH = Path(__file__).parent.parent / "Examples/UNB Feeders_reduced_preistman.txt"
+OUTPUT_PATH = Path(__file__).parent.parent / "Outputs/CYME_Extract_UNB_reduced_preistman.xlsx"
 
 # ====================================
 

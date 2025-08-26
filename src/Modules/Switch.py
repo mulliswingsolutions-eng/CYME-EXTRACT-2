@@ -27,6 +27,35 @@ def _device_id(dev: ET.Element, from_bus: str, to_bus: str) -> str:
     return did
 
 
+def _keep_device(dev: ET.Element, dev_type: str) -> bool:
+    """
+    Location-based filter:
+      - Always keep Location="Middle" or missing.
+      - For edge devices (Location="From"/"To"):
+          * Breaker  -> keep only if Restriction == 0
+          * Others   -> keep regardless of Restriction
+    """
+    loc = (dev.findtext("Location") or "").strip().lower()
+    if not loc or loc == "middle":
+        return True
+
+    if loc in ("from", "to"):
+        if dev_type == "Breaker":
+            restr_txt = (dev.findtext("Restriction") or "").strip()
+            # treat nonzero/nonempty as restricted
+            is_restricted = (restr_txt not in ("", "0", "false", "False"))
+            return not is_restricted
+        else:
+            return True  # Switch / Sectionalizer / Fuse: include even if restricted
+
+    # Unknown location values: treat like edges with the same logic
+    if dev_type == "Breaker":
+        restr_txt = (dev.findtext("Restriction") or "").strip()
+        is_restricted = (restr_txt not in ("", "0", "false", "False"))
+        return not is_restricted
+    return True
+
+
 def _rows_from_file(txt_path: Path) -> List[Tuple[str, str, str, int]]:
     """
     Returns rows of (From Bus, To Bus, ID, Status).
@@ -43,36 +72,31 @@ def _rows_from_file(txt_path: Path) -> List[Tuple[str, str, str, int]]:
         if not from_bus or not to_bus:
             continue
 
-        # Section's declared phases (can be empty/None/invalid).
-        sec_phase_text = sec.findtext("Phase")
-        sec_phases = _phase_tokens(sec_phase_text)
+        sec_phases = _phase_tokens(sec.findtext("Phase"))
 
-        devs: List[ET.Element] = []
         for tag in DEVICE_TAGS:
-            devs.extend(sec.findall(f".//Devices/{tag}"))
+            for dev in sec.findall(f".//Devices/{tag}"):
+                if not _keep_device(dev, tag):
+                    continue
 
-        for dev in devs:
-            base_id = _device_id(dev, from_bus, to_bus)
+                base_id = _device_id(dev, from_bus, to_bus)
 
-            closed_phase_text = (dev.findtext("ClosedPhase") or "").strip()
-            closed_set = set(_phase_tokens(closed_phase_text))
+                closed_phase_text = (dev.findtext("ClosedPhase") or "").strip()
+                closed_set = set(_phase_tokens(closed_phase_text))  # e.g., None -> {}, ABC -> {A,B,C}
 
-            # If section phases are missing/invalid, fall back to ClosedPhase; else ABC.
-            phases = sec_phases if sec_phases else (list(closed_set) if closed_set else list(PHASES))
+                # Use section phases if available; else ClosedPhase if specified; else ABC
+                phases = sec_phases if sec_phases else (list(closed_set) if closed_set else list(PHASES))
 
-            normal_status = (dev.findtext("NormalStatus") or "").strip().lower()  # "closed"/"open"
+                normal_status = (dev.findtext("NormalStatus") or "").strip().lower()  # "closed"/"open"
 
-            for p in phases:
-                # ClosedPhase (if present) is authoritative per phase; otherwise use NormalStatus.
-                if closed_set:
-                    is_closed = (p in closed_set)
-                else:
-                    is_closed = (normal_status == "closed")
+                for p in phases:
+                    # ClosedPhase (if present) wins; otherwise fall back to NormalStatus
+                    is_closed = (p in closed_set) if closed_set else (normal_status == "closed")
 
-                fb = f"{from_bus}{SUFFIX[p]}"
-                tb = f"{to_bus}{SUFFIX[p]}"
-                rid = f"{base_id}{SUFFIX[p]}"
-                rows.append((fb, tb, rid, 1 if is_closed else 0))
+                    fb = f"{from_bus}{SUFFIX[p]}"
+                    tb = f"{to_bus}{SUFFIX[p]}"
+                    rid = f"{base_id}{SUFFIX[p]}"
+                    rows.append((fb, tb, rid, 1 if is_closed else 0))
 
     rows.sort(key=lambda r: (r[0], r[1], r[2]))
     return rows
@@ -82,7 +106,7 @@ def write_switch_sheet(xw, input_path: Path) -> None:
     """
     Create the 'Switch' sheet with columns:
     From Bus | To Bus | ID | Status
-    (Now includes Switches, Sectionalizers, Breakers, and Fuses.)
+    (Includes Switches, Sectionalizers, Breakers, and Fuses; device-aware location filtering.)
     """
     wb = xw.book
     ws = wb.add_worksheet("Switch")
@@ -95,7 +119,7 @@ def write_switch_sheet(xw, input_path: Path) -> None:
     # Column widths
     ws.set_column(0, 0, 18)  # From Bus
     ws.set_column(1, 1, 18)  # To Bus
-    ws.set_column(2, 2, 22)  # ID (DeviceNumber/DeviceID + _phase)
+    ws.set_column(2, 2, 28)  # ID
     ws.set_column(3, 3, 8)   # Status
 
     # Header
