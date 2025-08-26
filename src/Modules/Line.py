@@ -4,11 +4,22 @@ from __future__ import annotations
 from pathlib import Path
 import xml.etree.ElementTree as ET
 from typing import Dict, List, Optional, Tuple
+import re
 
 # ---- constants / small helpers ----
 MI_PER_M = 0.000621371192
 MI_PER_KM = 0.621371192  # multiply (per-km) to get per-mile
 PHASE_SUFFIX = {"A": "_a", "B": "_b", "C": "_c"}
+
+# sanitize: allow only letters, digits, underscore
+_SAFE_RE = re.compile(r"[^A-Za-z0-9_]+")
+def _safe_name(s: Optional[str]) -> str:
+    s = (s or "").strip()
+    if not s:
+        return ""
+    s = _SAFE_RE.sub("_", s)
+    s = re.sub(r"_+", "_", s)
+    return s.strip("_")
 
 
 def _f(s: Optional[str]) -> float:
@@ -76,22 +87,30 @@ def _iter_lines(root: ET.Element):
     """
     Yield dicts describing each line/cable section.
       {type, id, from, to, phase, length_m, line_id}
+
+    NOTE: from/to and id are sanitized to [A-Za-z0-9_].
+    The database lookup key (line_id/cable_id) is NOT sanitized.
     """
     for sec in root.findall(".//Sections/Section"):
-        from_bus = (sec.findtext("FromNodeID") or "").strip()
-        to_bus   = (sec.findtext("ToNodeID") or "").strip()
-        phase    = (sec.findtext("Phase") or "").strip().upper() or "ABC"
+        from_bus_raw = (sec.findtext("FromNodeID") or "").strip()
+        to_bus_raw   = (sec.findtext("ToNodeID") or "").strip()
+        phase        = (sec.findtext("Phase") or "").strip().upper() or "ABC"
+
+        # sanitize bus names for output/IDs
+        from_bus = _safe_name(from_bus_raw)
+        to_bus   = _safe_name(to_bus_raw)
+        row_id   = f"LN_{from_bus}_{to_bus}"
 
         # OverheadLineUnbalanced
         olu = sec.find(".//Devices/OverheadLineUnbalanced")
         if olu is not None:
             yield {
                 "type": "OverheadLineUnbalanced",
-                "id": f"LN_{from_bus}_{to_bus}",
+                "id": row_id,
                 "from": from_bus, "to": to_bus,
                 "phase": phase,
                 "length_m": _f(olu.findtext("Length")),
-                "line_id": (olu.findtext("LineID") or "").strip(),
+                "line_id": (olu.findtext("LineID") or "").strip(),  # keep raw for DB match
             }
             continue
 
@@ -100,7 +119,7 @@ def _iter_lines(root: ET.Element):
         if obp is not None:
             yield {
                 "type": "OverheadByPhase",
-                "id": f"LN_{from_bus}_{to_bus}",
+                "id": row_id,
                 "from": from_bus, "to": to_bus,
                 "phase": phase,
                 "length_m": _f(obp.findtext("Length")),
@@ -113,11 +132,11 @@ def _iter_lines(root: ET.Element):
         if ol is not None:
             yield {
                 "type": "OverheadLine",
-                "id": f"LN_{from_bus}_{to_bus}",
+                "id": row_id,
                 "from": from_bus, "to": to_bus,
                 "phase": phase,
                 "length_m": _f(ol.findtext("Length")),
-                "line_id": (ol.findtext("LineID") or "").strip(),
+                "line_id": (ol.findtext("LineID") or "").strip(),  # keep raw for DB match
             }
             continue
 
@@ -126,11 +145,11 @@ def _iter_lines(root: ET.Element):
         if ug is not None:
             yield {
                 "type": "Underground",
-                "id": f"LN_{from_bus}_{to_bus}",
+                "id": row_id,
                 "from": from_bus, "to": to_bus,
                 "phase": phase,
                 "length_m": _f(ug.findtext("Length")),
-                "line_id": (ug.findtext("CableID") or ug.findtext("LineID") or "").strip(),
+                "line_id": (ug.findtext("CableID") or ug.findtext("LineID") or "").strip(),  # keep raw
             }
             continue
 
@@ -142,12 +161,19 @@ def _scaled(v: float) -> float:
 
 
 def _has_per_phase(dbvals: Dict[str, float]) -> bool:
-    return (
-        dbvals.get("SelfResistanceA", 0.0) != 0.0 or
-        dbvals.get("SelfReactanceA", 0.0)  != 0.0 or
-        dbvals.get("MutualResistanceAB", 0.0) != 0.0 or
-        dbvals.get("PositiveSequenceResistance", 0.0) == 0.0  # hint we *don't* have only sequence
+    """
+    Any non-zero per-phase field means per-phase data exists.
+    (Avoids misclassifying as sequence-only when per-phase fields are present.)
+    """
+    keys = (
+        "SelfResistanceA", "SelfReactanceA", "ShuntSusceptanceA",
+        "SelfResistanceB", "SelfReactanceB", "ShuntSusceptanceB",
+        "SelfResistanceC", "SelfReactanceC", "ShuntSusceptanceC",
+        "MutualResistanceAB", "MutualReactanceAB", "MutualShuntSusceptanceAB",
+        "MutualResistanceBC", "MutualReactanceBC", "MutualShuntSusceptanceBC",
+        "MutualResistanceCA", "MutualReactanceCA", "MutualShuntSusceptanceCA",
     )
+    return any(abs(dbvals.get(k, 0.0)) > 0.0 for k in keys)
 
 
 def _per_phase_matrix_from_seq(dbvals: Dict[str, float]) -> Tuple[float, float, float, float, float, float]:
@@ -166,7 +192,6 @@ def _per_phase_matrix_from_seq(dbvals: Dict[str, float]) -> Tuple[float, float, 
     B1 = _scaled(dbvals.get("PositiveSequenceShuntSusceptance", 0.0))
     B0 = _scaled(dbvals.get("ZeroSequenceShuntSusceptance", 0.0))
 
-    # complex arithmetic but kept as separate real/imag because we only need R and X
     r_self = (R0 + 2.0 * R1) / 3.0
     x_self = (X0 + 2.0 * X1) / 3.0
     r_mut  = (R0 - R1) / 3.0
@@ -219,6 +244,7 @@ def _series_shunt_for_pair(dbvals: Dict[str, float], p1: str, p2: Optional[str] 
 def write_line_sheet(xw, input_path: Path) -> None:
     """
     Create the 'Line' sheet using xlsxwriter via the ExcelWriter already open in main.
+    All output bus names and IDs are sanitized to [A-Za-z0-9_].
     """
     # Parse XML once
     root = ET.fromstring(Path(input_path).read_text(encoding="utf-8", errors="ignore"))
@@ -234,12 +260,17 @@ def write_line_sheet(xw, input_path: Path) -> None:
         length_mi = (item["length_m"] or 0.0) * MI_PER_M
         status = 1  # connected in the file
 
-        # Choose a DB: prefer explicit LineID/CableID; else heuristic default
+        # --- pick DB values BEFORE computing rows ---
         dbid = item["line_id"]
-        if dbid not in dbmap:
-            # heuristic for OverheadByPhase without DB
-            dbid = "LINE601" if phase == "ABC" else "LINE603"
-        dbvals = dbmap.get(dbid, {})
+        if dbid and dbid in dbmap:
+            dbvals = dbmap[dbid]
+        elif item["type"] == "OverheadByPhase" and "DEFAULT" in dbmap:
+            # Prefer file's DEFAULT DB when OverheadByPhase has no LineID/CableID
+            dbvals = dbmap["DEFAULT"]
+        else:
+            # Keep old heuristic for other files
+            fallback = "LINE601" if phase == "ABC" else "LINE603"
+            dbvals = dbmap.get(fallback, {})
 
         if phase in ("A", "B", "C"):
             p = phase

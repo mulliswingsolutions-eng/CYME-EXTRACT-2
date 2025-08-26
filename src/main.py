@@ -45,8 +45,14 @@ from Modules.Switch import write_switch_sheet
 #INPUT_PATH = Path(__file__).parent.parent / "Examples/UNB Feeders_reduced_aberdeen.txt"
 #OUTPUT_PATH = Path(__file__).parent.parent / "Outputs/CYME_Extract_UNB_reduced_aberdeen.xlsx"
 
-INPUT_PATH = Path(__file__).parent.parent / "Examples/UNB Feeders_reduced_preistman.txt"
-OUTPUT_PATH = Path(__file__).parent.parent / "Outputs/CYME_Extract_UNB_reduced_preistman.xlsx"
+#INPUT_PATH = Path(__file__).parent.parent / "Examples/UNB Feeders_reduced_preistman.txt"
+#UTPUT_PATH = Path(__file__).parent.parent / "Outputs/CYME_Extract_UNB_reduced_preistman.xlsx"
+
+#INPUT_PATH = Path(__file__).parent.parent / "Examples/UNB Feeders_reduced_preistman_A.txt"
+#OUTPUT_PATH = Path(__file__).parent.parent / "Outputs/CYME_Extract_UNB_reduced_preistman_A.xlsx"
+
+INPUT_PATH = Path(__file__).parent.parent / "Examples/IEEE_34_node_test_feeder_modified.txt"
+OUTPUT_PATH = Path(__file__).parent.parent / "Outputs/IEEE_34_node_test_feeder_modified.xlsx"
 
 # ====================================
 
@@ -69,11 +75,10 @@ def main():
         write_load_sheet(xw, in_path)
         write_line_sheet(xw, in_path)
         write_transformer_sheet(xw, in_path)
-        write_shunt_sheet(xw, in_path)
         write_switch_sheet(xw, in_path)
+        write_shunt_sheet(xw, in_path)
 
     print(f"Wrote: {out_path}")
-
 
 if __name__ == "__main__":
     main()

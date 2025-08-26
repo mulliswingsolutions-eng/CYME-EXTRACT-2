@@ -12,6 +12,16 @@ PHASES = ("A", "B", "C")
 PHASE_SUFFIX = {"A": "_a", "B": "_b", "C": "_c"}
 EPS = 1e-6  # numerical zero
 
+# --- sanitize identifiers (allow only [A-Za-z0-9_]) ---
+_SAFE_RE = re.compile(r"[^A-Za-z0-9_]+")
+def _safe_name(s: str | None) -> str:
+    s = (s or "").strip()
+    if not s:
+        return ""
+    s = _SAFE_RE.sub("_", s)
+    s = re.sub(r"_+", "_", s)
+    return s.strip("_")
+
 
 def _read_xml(path: Path) -> ET.Element:
     return ET.fromstring(path.read_text(encoding="utf-8", errors="ignore"))
@@ -56,6 +66,7 @@ def _build_voltage_map(txt_path: Path) -> Dict[str, float]:
     """
     Seed KVLL from <Sources> and transformer DB, then propagate through
     'pure network' branches (lines/cables/switches) that do not host loads/shunts.
+    All node IDs are sanitized so they match sheet outputs.
     """
     root = _read_xml(txt_path)
     kvll_default = _get_source_kvll(root)
@@ -63,29 +74,33 @@ def _build_voltage_map(txt_path: Path) -> Dict[str, float]:
 
     G: Dict[str, Set[str]] = {}
 
-    def add_edge(a: str, b: str) -> None:
+    def add_edge(a_raw: str, b_raw: str) -> None:
+        a, b = _safe_name(a_raw), _safe_name(b_raw)
         if not a or not b:
             return
         G.setdefault(a, set()).add(b)
         G.setdefault(b, set()).add(a)
 
     seeds: Dict[str, float] = {}
-    src_node = (root.findtext(".//Sources/Source/SourceNodeID") or "").strip()
+    src_node = _safe_name(root.findtext(".//Sources/Source/SourceNodeID"))
     if src_node and kvll_default > 0:
         seeds[src_node] = kvll_default
 
     for sec in root.findall(".//Sections/Section"):
-        f = (sec.findtext("./FromNodeID") or "").strip()
-        t = (sec.findtext("./ToNodeID") or "").strip()
+        f_raw = (sec.findtext("./FromNodeID") or "").strip()
+        t_raw = (sec.findtext("./ToNodeID") or "").strip()
+        f = _safe_name(f_raw)
+        t = _safe_name(t_raw)
 
         has_spot = sec.find(".//Devices/SpotLoad") is not None
+        has_dist = sec.find(".//Devices/DistributedLoad") is not None   # NEW: distributed
         has_shunt = (sec.find(".//Devices/ShuntCapacitor") is not None
                      or sec.find(".//Devices/ShuntReactor") is not None)
 
         xf = sec.find(".//Devices/Transformer")
         if xf is not None:
             dev_id = (xf.findtext("DeviceID") or "").strip()
-            normal = (xf.findtext("NormalFeedingNodeID") or "").strip()
+            normal = _safe_name(xf.findtext("NormalFeedingNodeID"))
             vals = tdb.get(dev_id, {})
             kvp = vals.get("kvp") or 0.0
             kvs = vals.get("kvs") or 0.0
@@ -110,12 +125,12 @@ def _build_voltage_map(txt_path: Path) -> Dict[str, float]:
         )
         has_switch = sec.find(".//Devices/Switch") is not None
 
-        if (has_line or has_switch) and not (has_spot or has_shunt):
+        # Do NOT connect across sections that host any load (spot or distributed) or shunt
+        if (has_line or has_switch) and not (has_spot or has_dist or has_shunt):
             add_edge(f, t)
 
-    # BFS propagate
+    # BFS propagate (on sanitized node names)
     bus_kv: Dict[str, float] = {}
-    from collections import deque
 
     for start, kv in seeds.items():
         if start in bus_kv:
@@ -137,7 +152,7 @@ def _build_voltage_map(txt_path: Path) -> Dict[str, float]:
 # Load parsing
 # =======================
 def _sanitize_id(s: str) -> str:
-    return re.sub(r"[^A-Za-z0-9_]+", "_", s).strip("_")
+    return _safe_name(s)
 
 
 def _norm_load_id(device_number: str, section_id: str, from_node_id: str) -> str:
@@ -248,53 +263,57 @@ def _expand_phases(phase_tag: str) -> List[str]:
     return []
 
 
-def _parse_spot_loads_all(txt_path: Path) -> List[Dict[str, Any]]:
+def _parse_spot_and_distributed_loads(txt_path: Path) -> List[Dict[str, Any]]:
     """
-    Build observations per declared phase.
-    We do NOT drop zero values here; grouping decides whether to keep zero-only devices,
-    so loads with kW=0 still appear in the right table.
+    Build observations per declared phase from BOTH SpotLoad and DistributedLoad.
+    All bus/ID fields sanitized. We keep zero values; grouping decides visibility.
     """
     root = _read_xml(Path(txt_path))
     out: List[Dict[str, Any]] = []
 
     for sec in root.findall(".//Sections/Section"):
-        spot = sec.find(".//Devices/SpotLoad")
-        if spot is None:
-            continue
-
-        section_id = (sec.findtext("./SectionID") or "").strip()
-        from_bus = (sec.findtext("./FromNodeID") or "").strip()
+        section_id = _safe_name(sec.findtext("./SectionID"))
+        from_bus = _safe_name(sec.findtext("./FromNodeID"))
         if not from_bus:
             continue
 
-        dev_num = (spot.findtext("./DeviceNumber") or "").strip()
-        conn_cfg = (spot.findtext("./ConnectionConfiguration") or "").strip()
-        status_txt = (spot.findtext(".//CustomerLoad/ConnectionStatus") or "").strip().lower()
-        status = 1 if status_txt == "connected" else 0
-        cust_type = (spot.findtext(".//CustomerLoad/CustomerType") or "").strip()
+        # Collect both device types (can be co-located with lines in the same Section)
+        devices = list(sec.findall(".//Devices/SpotLoad")) + list(sec.findall(".//Devices/DistributedLoad"))
+        if not devices:
+            continue
 
-        load_id = _norm_load_id(dev_num, section_id, from_bus)
+        for dev in devices:
+            dev_num = _safe_name(dev.findtext("./DeviceNumber"))
+            conn_cfg = (dev.findtext("./ConnectionConfiguration") or "").strip()
+            # Status & type live under CustomerLoad
+            status_txt = (dev.findtext(".//CustomerLoad/ConnectionStatus") or "").strip().lower()
+            status = 1 if status_txt == "connected" else 0
+            cust_type = (dev.findtext(".//CustomerLoad/CustomerType") or "").strip()
+            # Load value type (for ZIP flags)
+            lvt = (dev.findtext(".//CustomerLoadModel/LoadValueType") or "").strip().upper()
 
-        for val in spot.findall(".//CustomerLoadValue"):
-            phases = _expand_phases(val.findtext("./Phase"))
-            if not phases:
-                continue
-            kw, kvar = _kw_kvar_from_value(val)
-            # Split evenly when the original row was aggregated
-            share_p = float((kw or 0.0) / len(phases))
-            share_q = float((kvar or 0.0) / len(phases))
-            for p in phases:
-                out.append({
-                    "id": load_id,
-                    "bus": from_bus,
-                    "phase": p,
-                    "conn": conn_cfg,
-                    "kw": share_p,
-                    "kvar": share_q,
-                    "status": status,
-                    "cust_type": cust_type,
-                    "declared": True,
-                })
+            load_id = _norm_load_id(dev_num, section_id, from_bus)
+
+            for val in dev.findall(".//CustomerLoadValue"):
+                phases = _expand_phases(val.findtext("./Phase"))
+                if not phases:
+                    continue
+                kw, kvar = _kw_kvar_from_value(val)
+                share_p = float((kw or 0.0) / len(phases))
+                share_q = float((kvar or 0.0) / len(phases))
+                for p in phases:
+                    out.append({
+                        "id": load_id,
+                        "bus": from_bus,
+                        "phase": p,
+                        "conn": conn_cfg,
+                        "kw": share_p,
+                        "kvar": share_q,
+                        "status": status,
+                        "cust_type": cust_type,
+                        "lvt": lvt,
+                        "declared": True,
+                    })
 
     return out
 
@@ -315,7 +334,15 @@ def _group_by_device(observations: List[Dict[str, Any]]):
         acc[lid][ph]["kw"] += o["kw"]
         acc[lid][ph]["kvar"] += o["kvar"]
         declared.setdefault(lid, set()).add(ph)
-        meta[lid] = {"bus": o["bus"], "conn": o["conn"], "status": o["status"], "cust_type": o["cust_type"]}
+        # keep the first-seen metadata; if multiple lvt appear, last one wins (rare)
+        m = meta.get(lid, {})
+        meta[lid] = {
+            "bus": o["bus"],
+            "conn": o["conn"],
+            "status": o["status"],
+            "cust_type": o["cust_type"],
+            "lvt": o.get("lvt", m.get("lvt")),
+        }
 
     single, two, three = [], [], []
     for lid, phase_map in acc.items():
@@ -323,13 +350,19 @@ def _group_by_device(observations: List[Dict[str, Any]]):
                      if abs(phase_map.get(p, {}).get("kw", 0.0)) > EPS
                      or abs(phase_map.get(p, {}).get("kvar", 0.0)) > EPS]
 
-        # If all powers are ~0, fall back to the declared phase set so the device still appears.
         phases_used = nz_phases if nz_phases else [p for p in PHASES if p in declared.get(lid, set())]
         if not phases_used:
             continue
 
         m = meta[lid]
-        base = {"ID": lid, "Status": m["status"], "Bus": m["bus"], "Conn": m["conn"], "CustType": m["cust_type"]}
+        base = {
+            "ID": lid,
+            "Status": m["status"],
+            "Bus": m["bus"],
+            "Conn": m["conn"],
+            "CustType": m["cust_type"],
+            "LVT": m.get("lvt", ""),
+        }
 
         if len(phases_used) == 1:
             p = phases_used[0]
@@ -366,14 +399,17 @@ def _group_by_device(observations: List[Dict[str, Any]]):
 # -----------------------
 # ZIP flags
 # -----------------------
-def _zip_flags(cust_type: str, load_value_type: str | None = None) -> tuple[int,int,int]:
+def _zip_flags(cust_type: str, load_value_type: str | None = None) -> tuple[int, int, int]:
+    """
+    Return (Kz, Ki, Kp).
+    Prefer explicit LoadValueType when present; otherwise, default to constant power.
+    """
     lvt = (load_value_type or "").upper()
     if lvt in ("KW_PF", "KW_KVAR"):
         return 0, 0, 1   # constant power
     if lvt in ("KVA_PF", "KVA_KVAR"):
-        return 0, 1, 0   # (only if you really want a rule like this)
-    return 0, 0, 1
-
+        return 0, 1, 0   # treat KVA-based as current-type (can be adjusted)
+    return 0, 0, 1       # default to constant power
 
 
 # =======================
@@ -401,11 +437,11 @@ def write_load_sheet(xw, input_path: Path) -> None:
     # Header
     ws.write(0, 0, "Type", bold)
 
-    # Parse + group
-    obs = _parse_spot_loads_all(input_path)
+    # Parse + group (Spot + Distributed)
+    obs = _parse_spot_and_distributed_loads(input_path)
     single_rows, two_rows, three_rows = _group_by_device(obs)
 
-    # Voltage map
+    # Voltage map (built on sanitized node names)
     bus_kvll = _build_voltage_map(input_path)
 
     # Anchors
@@ -459,7 +495,7 @@ def write_load_sheet(xw, input_path: Path) -> None:
     )
     rcur = b4_first
     for row in single_rows:
-        kz, ki, kp = _zip_flags(row["CustType"])
+        kz, ki, kp = _zip_flags(row["CustType"], row.get("LVT"))
         bus = row["Bus"]
         vkv = bus_kvll.get(bus, bus_kvll["_default_"])
         conn = (row["Conn"] or "").lower()
@@ -476,7 +512,7 @@ def write_load_sheet(xw, input_path: Path) -> None:
         ws.write_number(rcur, 10, row["P1"], num0)
         ws.write_number(rcur, 11, row["Q1"], num0)
         rcur += 1
-    ws.merge_range(b4_e, 0, b4_e, 1, "End of SinglePhase ZIP Load")
+    ws.merge_range(b4_e, 0, b4_e, 1, "End of Single-Phase ZIP Load")
 
     # -------- Block 5: Two-Phase ZIP --------
     ws.merge_range(b5_t, 0, b5_t, 1, "Two-Phase ZIP Load", bold)
@@ -489,7 +525,7 @@ def write_load_sheet(xw, input_path: Path) -> None:
     )
     rcur = b5_first
     for row in two_rows:
-        kz, ki, kp = _zip_flags(row["CustType"])
+        kz, ki, kp = _zip_flags(row["CustType"], row.get("LVT"))
         bus = row["Bus"]
         vkv = bus_kvll.get(bus, bus_kvll["_default_"])
         p1, p2 = row["PhasePair"]
@@ -504,7 +540,7 @@ def write_load_sheet(xw, input_path: Path) -> None:
         ws.write_number(rcur,11, row["P1"], num0); ws.write_number(rcur,12, row["Q1"], num0)
         ws.write_number(rcur,13, row["P2"], num0); ws.write_number(rcur,14, row["Q2"], num0)
         rcur += 1
-    ws.merge_range(b5_e, 0, b5_e, 1, "End of TwoPhase ZIP Load")
+    ws.merge_range(b5_e, 0, b5_e, 1, "End of Two-Phase ZIP Load")
 
     # -------- Block 6: Three-Phase ZIP --------
     ws.merge_range(b6_t, 0, b6_t, 1, "Three-Phase ZIP Load", bold)
@@ -518,7 +554,7 @@ def write_load_sheet(xw, input_path: Path) -> None:
     )
     rcur = b6_first
     for row in three_rows:
-        kz, ki, kp = _zip_flags(row["CustType"])
+        kz, ki, kp = _zip_flags(row["CustType"], row.get("LVT"))
         bus = row["Bus"]
         vkv = bus_kvll.get(bus, bus_kvll["_default_"])
         conn = (row["Conn"] or "").lower()

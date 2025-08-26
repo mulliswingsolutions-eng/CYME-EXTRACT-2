@@ -1,12 +1,23 @@
 # Modules/Switch.py
 from __future__ import annotations
 from pathlib import Path
+import re
 import xml.etree.ElementTree as ET
 from typing import List, Tuple
 
 PHASES = ("A", "B", "C")
 SUFFIX = {"A": "_a", "B": "_b", "C": "_c"}
 DEVICE_TAGS = ("Switch", "Sectionalizer", "Breaker", "Fuse")
+
+# --- NEW: sanitize identifiers (allow only [A-Za-z0-9_]) ---
+_SAFE_RE = re.compile(r"[^A-Za-z0-9_]+")
+def _safe_name(s: str | None) -> str:
+    s = (s or "").strip()
+    if not s:
+        return ""
+    s = _SAFE_RE.sub("_", s)       # replace disallowed chars with "_"
+    s = re.sub(r"_+", "_", s)      # collapse runs of "_"
+    return s.strip("_")            # trim leading/trailing "_"
 
 
 def _phase_tokens(s: str | None) -> List[str]:
@@ -17,13 +28,14 @@ def _phase_tokens(s: str | None) -> List[str]:
     return [p for p in PHASES if p in u]
 
 
-def _device_id(dev: ET.Element, from_bus: str, to_bus: str) -> str:
-    """Prefer DeviceNumber, then DeviceID, else synthesize."""
+def _device_id(dev: ET.Element, from_bus_san: str, to_bus_san: str) -> str:
+    """Prefer DeviceNumber, then DeviceID, else synthesize (all sanitized)."""
     did = (dev.findtext("DeviceNumber") or "").strip()
     if not did:
         did = (dev.findtext("DeviceID") or "").strip()
+    did = _safe_name(did)
     if not did:
-        did = f"SW_{from_bus}_{to_bus}"
+        did = _safe_name(f"SW_{from_bus_san}_{to_bus_san}")
     return did
 
 
@@ -42,7 +54,6 @@ def _keep_device(dev: ET.Element, dev_type: str) -> bool:
     if loc in ("from", "to"):
         if dev_type == "Breaker":
             restr_txt = (dev.findtext("Restriction") or "").strip()
-            # treat nonzero/nonempty as restricted
             is_restricted = (restr_txt not in ("", "0", "false", "False"))
             return not is_restricted
         else:
@@ -67,10 +78,14 @@ def _rows_from_file(txt_path: Path) -> List[Tuple[str, str, str, int]]:
     rows: List[Tuple[str, str, str, int]] = []
 
     for sec in root.findall(".//Section"):
-        from_bus = (sec.findtext("FromNodeID") or "").strip()
-        to_bus   = (sec.findtext("ToNodeID") or "").strip()
-        if not from_bus or not to_bus:
+        from_bus_raw = (sec.findtext("FromNodeID") or "").strip()
+        to_bus_raw   = (sec.findtext("ToNodeID") or "").strip()
+        if not from_bus_raw or not to_bus_raw:
             continue
+
+        # sanitize bus names
+        from_bus = _safe_name(from_bus_raw)
+        to_bus   = _safe_name(to_bus_raw)
 
         sec_phases = _phase_tokens(sec.findtext("Phase"))
 
@@ -82,7 +97,7 @@ def _rows_from_file(txt_path: Path) -> List[Tuple[str, str, str, int]]:
                 base_id = _device_id(dev, from_bus, to_bus)
 
                 closed_phase_text = (dev.findtext("ClosedPhase") or "").strip()
-                closed_set = set(_phase_tokens(closed_phase_text))  # e.g., None -> {}, ABC -> {A,B,C}
+                closed_set = set(_phase_tokens(closed_phase_text))  # "None" -> empty set
 
                 # Use section phases if available; else ClosedPhase if specified; else ABC
                 phases = sec_phases if sec_phases else (list(closed_set) if closed_set else list(PHASES))
@@ -106,7 +121,8 @@ def write_switch_sheet(xw, input_path: Path) -> None:
     """
     Create the 'Switch' sheet with columns:
     From Bus | To Bus | ID | Status
-    (Includes Switches, Sectionalizers, Breakers, and Fuses; device-aware location filtering.)
+    (Includes Switches, Sectionalizers, Breakers, and Fuses; device-aware location filtering.
+     All bus/ID strings are sanitized to contain only letters, digits, and underscores.)
     """
     wb = xw.book
     ws = wb.add_worksheet("Switch")

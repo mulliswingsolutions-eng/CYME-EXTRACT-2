@@ -182,21 +182,21 @@ def write_pins_sheet(xw, input_path: Path) -> None:
         r += 1
 
     # ---- outgoing: V_abs ----
-    vabs = ["outgoing", "V_abs"]
+    vabs = ["//outgoing", "V_abs"]
     for b in sorted(v_buses):
         for p in sorted(bus_ph.get(b, set(PHASES)), key=lambda x: "ABC".index(x)):
             vabs.append(f"{b}{SUFFIX[p]}/Vmag")
     row(vabs)
 
     # ---- outgoing: V_ang ----
-    vang = ["outgoing", "V_ang"]
+    vang = ["//outgoing", "V_ang"]
     for b in sorted(v_buses):
         for p in sorted(bus_ph.get(b, set(PHASES)), key=lambda x: "ABC".index(x)):
             vang.append(f"{b}{SUFFIX[p]}/Vang")
     row(vang)
 
     # ---- outgoing: I_abs (From side currents) ----
-    iabs = ["outgoing", "I_abs"]
+    iabs = ["//outgoing", "I_abs"]
     for fb, tb, nph in sorted(lines):
         # include line if its from-bus is in the selected voltage set
         if fb not in v_buses:
@@ -207,7 +207,7 @@ def write_pins_sheet(xw, input_path: Path) -> None:
     row(iabs)
 
     # ---- outgoing: I_ang (From side angles) ----
-    iang = ["outgoing", "I_ang"]
+    iang = ["//outgoing", "I_ang"]
     for fb, tb, nph in sorted(lines):
         if fb not in v_buses:
             continue
@@ -217,7 +217,7 @@ def write_pins_sheet(xw, input_path: Path) -> None:
     row(iang)
 
     # ---- outgoing: PQ_ld (loads at the selected buses) ----
-    pq_out = ["outgoing", "PQ_ld"]
+    pq_out = ["//outgoing", "PQ_ld"]
     for b in sorted(v_buses):
         n = load_phase_counts.get(b, 0)
         if n <= 0:
@@ -229,7 +229,7 @@ def write_pins_sheet(xw, input_path: Path) -> None:
     row(pq_out)
 
     # ---- incoming: Trans_tap (all transformers) ----
-    taps = ["incoming", "Trans_tap"]
+    taps = ["//incoming", "Trans_tap"]
     for fb, tb, nph in sorted(xf_pairs):
         base = f"TR1_{fb}_{tb}"
         for idx in range(1, nph + 1):
@@ -237,7 +237,7 @@ def write_pins_sheet(xw, input_path: Path) -> None:
     row(taps)
 
     # ---- incoming: PQ_ld (match the same loads we exposed) ----
-    pq_in = ["incoming", "PQ_ld"]
+    pq_in = ["//incoming", "PQ_ld"]
     for b in sorted(v_buses):
         n = load_phase_counts.get(b, 0)
         if n <= 0:

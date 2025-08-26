@@ -3,6 +3,26 @@ from __future__ import annotations
 from pathlib import Path
 import xml.etree.ElementTree as ET
 from typing import List, Dict, Any, Optional
+import re
+
+# --- sanitizers (no '-' allowed) ---
+_SAFE_RE = re.compile(r"[^A-Za-z0-9_]+")
+def _safe_name(s: Optional[str]) -> str:
+    s = (s or "").strip()
+    if not s:
+        return ""
+    s = _SAFE_RE.sub("_", s)
+    s = re.sub(r"_+", "_", s)
+    return s.strip("_")
+
+def _make_src_id(raw: str) -> str:
+    """
+    Sanitize and ensure single 'SRC_' prefix.
+    """
+    name = _safe_name(raw)
+    if not name:
+        return "SRC_?"
+    return name if name.startswith("SRC_") else f"SRC_{name}"
 
 
 def _f(x: Optional[str]) -> Optional[float]:
@@ -12,21 +32,16 @@ def _f(x: Optional[str]) -> Optional[float]:
         return None
 
 
-def _sanitize_id(s: str) -> str:
-    return "SRC_" + "".join(ch if ch.isalnum() or ch in ("_", "-", ".") else "_" for ch in s)
-
-
 def _get_source_id(src: ET.Element, node: str, model_index: int | None = None) -> str:
-    sid = (
+    sid_raw = (
         (src.findtext("./SourceSettings/SourceID") or "").strip()
         or (src.findtext("./SourceSettings/DeviceNumber") or "").strip()
         or (src.findtext("./SourceID") or "").strip()
     )
-    if not sid:
-        sid = _sanitize_id(node)
+    base = sid_raw if sid_raw else _safe_name(node)
     if model_index and model_index > 1:
-        sid = f"{sid}-M{model_index}"
-    return sid
+        base = f"{base}_M{model_index}"   # underscore, not hyphen
+    return _make_src_id(base)
 
 
 def _pick_seq_impedances(eq: ET.Element | None, src: ET.Element) -> Optional[Dict[str, float]]:
@@ -90,7 +105,6 @@ def _gather_sources(root: ET.Element) -> List[ET.Element]:
         if ntype != "substation":
             continue
         if eq_mode == "1":
-            # Substation wrapper marked as 'equivalent' – skip (defensive)
             continue
         srcs_parent = topo.find("./Sources")
         if srcs_parent is None:
@@ -100,7 +114,6 @@ def _gather_sources(root: ET.Element) -> List[ET.Element]:
     if picked:
         return picked
 
-    # Backwards compatibility: some files may not wrap in <Topo>
     return root.findall(".//Sources/Source")
 
 
@@ -118,9 +131,10 @@ def _parse_voltage_sources(path: Path) -> tuple[list[dict], list[dict]]:
     seq_rows: List[Dict[str, Any]] = []
 
     for src in _gather_sources(root):
-        node = (src.findtext("./SourceNodeID") or "").strip()
-        if not node:
+        node_raw = (src.findtext("./SourceNodeID") or "").strip()
+        if not node_raw:
             continue
+        node = _safe_name(node_raw)  # sanitize bus base name
 
         models = src.findall("./EquivalentSourceModels/EquivalentSourceModel")
         if not models:
@@ -248,7 +262,7 @@ def write_voltage_source_sheet(xw, input_path: Path) -> None:
     ws.write_url(b3_title, 4, "internal:'Voltage Source'!A1", link_fmt, "Go to Type List")
     ws.write_row(
         b3_header, 0,
-        ["ID", "Bus1", "Bus2", "Bus3", "kV (ph-ph RMS)", "Angle_a (deg)", "SC1ph (MVA)", "SC3ph (MVA)"],
+        ["ID", "Bus1", "Bus2", "Bus3", "kV (ph-ph RMS)", " Angle_a (deg)", "SC1ph (MVA)", "SC3ph (MVA)"],
         th,
     )
     rcur = b3_first
@@ -258,7 +272,7 @@ def write_voltage_source_sheet(xw, input_path: Path) -> None:
         ws.write(rcur, 2, s["Bus2"])
         ws.write(rcur, 3, s["Bus3"])
         ws.write_number(rcur, 4, float(s["kV"]), num)
-        ws.write_number(rcur, 5, float(s["Angle_a"]), num)  # 0.0 if no offset
+        ws.write_number(rcur, 5, float(s["Angle_a"]), num)
         ws.write_number(rcur, 6, float(s["SC1ph"]), num)
         ws.write_number(rcur, 7, float(s["SC3ph"]), num)
         rcur += 1
@@ -269,7 +283,7 @@ def write_voltage_source_sheet(xw, input_path: Path) -> None:
     ws.write_url(b4_title, 4, "internal:'Voltage Source'!A1", link_fmt, "Go to Type List")
     ws.write_row(
         b4_header, 0,
-        ["ID", "Bus1", "Bus2", "Bus3", "kV (ph-ph RMS)", "Angle_a (deg)", "R1 (Ohm)", "X1 (Ohm)", "R0 (Ohm)", "X0 (Ohm)"],
+        ["ID", "Bus1", "Bus2", "Bus3", "kV (ph-ph RMS)", " Angle_a (deg)", "R1 (Ohm)", "X1 (Ohm)", "R0 (Ohm)", "X0 (Ohm)"],
         th,
     )
     rcur = b4_first
@@ -279,7 +293,7 @@ def write_voltage_source_sheet(xw, input_path: Path) -> None:
         ws.write(rcur, 2, s["Bus2"])
         ws.write(rcur, 3, s["Bus3"])
         ws.write_number(rcur, 4, float(s["kV"]), num)
-        ws.write_number(rcur, 5, float(s["Angle_a"]), num)  # 0.0 if none
+        ws.write_number(rcur, 5, float(s["Angle_a"]), num)
         ws.write_number(rcur, 6, float(s["R1"]), num)
         ws.write_number(rcur, 7, float(s["X1"]), num)
         ws.write_number(rcur, 8, float(s["R0"]), num)

@@ -1,6 +1,7 @@
 # Modules/Transformer.py
 from __future__ import annotations
 from pathlib import Path
+import re
 import xml.etree.ElementTree as ET
 from typing import Dict, List, Tuple, Any, Optional
 
@@ -10,7 +11,6 @@ from typing import Dict, List, Tuple, Any, Optional
 # ------------------------
 def _t(x: Optional[str]) -> str:
     return "" if x is None else x.strip()
-
 
 def _f(x: Optional[str]) -> Optional[float]:
     try:
@@ -25,6 +25,16 @@ def _f(x: Optional[str]) -> Optional[float]:
         return float(xs)
     except Exception:
         return None
+
+# ---- NEW: sanitize identifiers (remove '-' and anything not [A-Za-z0-9_]) ----
+_SAFE_RE = re.compile(r"[^A-Za-z0-9_]+")
+def _safe_name(s: str | None) -> str:
+    s = (s or "").strip()
+    if not s:
+        return ""
+    s = _SAFE_RE.sub("_", s)
+    s = re.sub(r"_+", "_", s)
+    return s.strip("_")
 
 
 def _phase_count(phase_str: str) -> int:
@@ -57,6 +67,8 @@ def _decode_conn(code: str) -> Tuple[str, str]:
 
 
 def _bus_labels(bus: str, phase_str: str) -> Tuple[str, str, str]:
+    # sanitize bus before composing phase-specific labels
+    bus = _safe_name(bus)
     s = (phase_str or "ABC").upper()
     labs = []
     for p in "ABC":
@@ -178,6 +190,7 @@ def _ltc_fields(xf: ET.Element) -> Dict[str, Optional[float]]:
         "min_rng": buck, "max_rng": boost,
     }
 
+
 def _parse_multiphase_2w_rows(input_path: Path) -> List[List[Any]]:
     """
     Parse <Section><Devices><Transformer> entries and build Multiphase 2W rows.
@@ -193,14 +206,19 @@ def _parse_multiphase_2w_rows(input_path: Path) -> List[List[Any]]:
         if xf is None:
             continue
 
-        from_bus = _t(sec.findtext("FromNodeID"))
-        to_bus   = _t(sec.findtext("ToNodeID"))
-        phase    = _t(sec.findtext("Phase") or "ABC").upper()
+        # raw values
+        from_bus_raw = _t(sec.findtext("FromNodeID"))
+        to_bus_raw   = _t(sec.findtext("ToNodeID"))
+        phase        = _t(sec.findtext("Phase") or "ABC").upper()
+
+        # sanitized for output / IDs
+        from_bus = _safe_name(from_bus_raw)
+        to_bus   = _safe_name(to_bus_raw)
 
         status_text = _t(xf.findtext("ConnectionStatus") or "Connected").lower()
         status = 1 if status_text == "connected" else 0
 
-        dev_id = _t(xf.findtext("DeviceID"))
+        dev_id = _t(xf.findtext("DeviceID"))  # keep raw for DB lookup keys
 
         # Connection type (prefer section value, else DB)
         conn_code = _t(xf.findtext("TransformerConnection"))
@@ -231,11 +249,13 @@ def _parse_multiphase_2w_rows(input_path: Path) -> List[List[Any]]:
         if taps["max_rng"] is None:
             taps["max_rng"] = info.get("maxreg")
 
-        # Bus labels (respect the stated phases)
+        # Bus labels (respect the stated phases) — bus names already sanitized
         b1a, b1b, b1c = _bus_labels(from_bus, phase)
         b2a, b2b, b2c = _bus_labels(to_bus, phase)
 
-        rid = f"TR1_{from_bus}_{to_bus}"
+        # sanitized row ID
+        rid = _safe_name(f"TR1_{from_bus}_{to_bus}")
+
         rows.append([
             rid, status, _phase_count(phase),
             b1a, b1b, b1c, kvp, kva, conn_p,

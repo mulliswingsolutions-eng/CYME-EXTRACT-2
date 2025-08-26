@@ -3,15 +3,32 @@ from __future__ import annotations
 from pathlib import Path
 import xml.etree.ElementTree as ET
 from typing import List, Dict, Any
+import re
 
 PHASE_SUFFIX = {"A": "_a", "B": "_b", "C": "_c"}
 PHASES = ("A", "B", "C")
 
+# --- NEW: sanitize identifiers (allow only [A-Za-z0-9_]) ---
+_SAFE_RE = re.compile(r"[^A-Za-z0-9_]+")
+def _safe_name(s: str | None) -> str:
+    s = (s or "").strip()
+    if not s:
+        return ""
+    s = _SAFE_RE.sub("_", s)       # replace disallowed chars with "_"
+    s = re.sub(r"_+", "_", s)      # collapse multiple underscores
+    return s.strip("_")            # trim leading/trailing underscores
+
 
 def _cap_id(from_node: str, device_number: str) -> str:
-    # goal style: "cap611", "cap675"
-    s = "".join(ch for ch in (from_node or device_number or "") if ch.isdigit())
-    return f"cap{s}" if s else (device_number or from_node or "cap?")
+    """
+    Goal style prefers 'cap<digits>' (e.g., cap611, cap675).
+    We extract digits from the sanitized FromNodeID or DeviceNumber.
+    If none, fall back to a sanitized identifier (no dashes/spaces).
+    """
+    fn = _safe_name(from_node)
+    dn = _safe_name(device_number)
+    s = "".join(ch for ch in (fn or dn or "") if ch.isdigit())
+    return f"cap{s}" if s else (dn or fn or "cap")
 
 
 def _parse_shunts(txt_path: Path):
@@ -21,6 +38,7 @@ def _parse_shunts(txt_path: Path):
     single_rows: [ID, Status, kVLN, Bus1, P1kW, Q1kVAr]
     two_rows:    [ID, Status1, Status2, kVLN, Bus1, Bus2, P1, Q1, P2, Q2]
     three_rows:  [ID, Status1, Status2, Status3, kVLN, Bus1, Bus2, Bus3, P1, Q1, P2, Q2, P3, Q3]
+    (All IDs and bus names sanitized to [A-Za-z0-9_].)
     """
     root = ET.fromstring(txt_path.read_text(encoding="utf-8", errors="ignore"))
 
@@ -33,25 +51,33 @@ def _parse_shunts(txt_path: Path):
         if dev is None:
             continue
 
-        from_bus = (sec.findtext("FromNodeID") or "").strip()
+        from_bus_raw = (sec.findtext("FromNodeID") or "").strip()
+        from_bus = _safe_name(from_bus_raw)
+
         phase = (sec.findtext("Phase") or "ABC").strip().upper()
 
-        devnum = (dev.findtext("DeviceNumber") or "").strip()
+        devnum_raw = (dev.findtext("DeviceNumber") or "").strip()
+        devnum = _safe_name(devnum_raw)
+
         status = 1 if (dev.findtext("ConnectionStatus") or "Connected").strip().lower() == "connected" else 0
         kvln = dev.findtext("KVLN")
         kvln = float(kvln) if kvln not in (None, "") else None
 
         # Fixed losses (kW) and kVAr per phase
-        kW = {
-            "A": float(dev.findtext("FixedLossesA") or 0.0),
-            "B": float(dev.findtext("FixedLossesB") or 0.0),
-            "C": float(dev.findtext("FixedLossesC") or 0.0),
-        }
-        kVAr = {
-            "A": float(dev.findtext("FixedKVARA") or 0.0),
-            "B": float(dev.findtext("FixedKVARB") or 0.0),
-            "C": float(dev.findtext("FixedKVARC") or 0.0),
-        }
+        def _f(txt: str | None) -> float:
+            try:
+                return float(txt) if txt not in (None, "") else 0.0
+            except Exception:
+                return 0.0
+
+        kW = {"A": _f(dev.findtext("FixedLossesA")),
+              "B": _f(dev.findtext("FixedLossesB")),
+              "C": _f(dev.findtext("FixedLossesC"))}
+
+        kVAr = {"A": _f(dev.findtext("FixedKVARA")),
+                "B": _f(dev.findtext("FixedKVARB")),
+                "C": _f(dev.findtext("FixedKVARC"))}
+
         # Convention: capacitors inject negative Q in the sheet
         for p in PHASES:
             kVAr[p] = -kVAr[p]
@@ -124,7 +150,7 @@ def write_shunt_sheet(xw, input_path: Path) -> None:
     for c, w in enumerate(widths):
         ws.set_column(c, c, w)
 
-    # Parse data
+    # Parse data (already sanitized)
     single_rows, two_rows, three_rows = _parse_shunts(input_path)
 
     # Anchor rows (blocks start at row 11 -> index 10)
@@ -169,7 +195,10 @@ def write_shunt_sheet(xw, input_path: Path) -> None:
     for row in single_rows:
         ws.write(rr, 0, row[0])
         ws.write_number(rr, 1, row[1], int0)
-        ws.write_number(rr, 2, row[2], num4)
+        if row[2] is None:
+            ws.write(rr, 2, "")
+        else:
+            ws.write_number(rr, 2, row[2], num4)
         ws.write(rr, 3, row[3])
         ws.write_number(rr, 4, row[4], int0)
         ws.write_number(rr, 5, row[5], int0)
@@ -185,7 +214,10 @@ def write_shunt_sheet(xw, input_path: Path) -> None:
         ws.write(rr, 0, row[0])
         ws.write_number(rr, 1, row[1], int0)
         ws.write_number(rr, 2, row[2], int0)
-        ws.write_number(rr, 3, row[3], num4)
+        if row[3] is None:
+            ws.write(rr, 3, "")
+        else:
+            ws.write_number(rr, 3, row[3], num4)
         ws.write(rr, 4, row[4]); ws.write(rr, 5, row[5])
         ws.write_number(rr, 6, row[6], int0); ws.write_number(rr, 7, row[7], int0)
         ws.write_number(rr, 8, row[8], int0); ws.write_number(rr, 9, row[9], int0)
@@ -200,10 +232,13 @@ def write_shunt_sheet(xw, input_path: Path) -> None:
     for row in three_rows:
         ws.write(rr, 0, row[0])
         ws.write_number(rr, 1, row[1], int0); ws.write_number(rr, 2, row[2], int0); ws.write_number(rr, 3, row[3], int0)
-        ws.write_number(rr, 4, row[4], num4)
+        if row[4] is None:
+            ws.write(rr, 4, "")
+        else:
+            ws.write_number(rr, 4, row[4], num4)
         ws.write(rr, 5, row[5]); ws.write(rr, 6, row[6]); ws.write(rr, 7, row[7])
-        ws.write_number(rr, 8, row[8], int0); ws.write_number(rr, 9, row[9], int0)
-        ws.write_number(rr,10, row[10], int0); ws.write_number(rr,11, row[11], int0)
-        ws.write_number(rr,12, row[12], int0); ws.write_number(rr,13, row[13], int0)
+        ws.write_number(rr, 8,  row[8],  int0); ws.write_number(rr, 9,  row[9],  int0)
+        ws.write_number(rr, 10, row[10], int0); ws.write_number(rr, 11, row[11], int0)
+        ws.write_number(rr, 12, row[12], int0); ws.write_number(rr, 13, row[13], int0)
         rr += 1
     ws.merge_range(b4_e, 0, b4_e, 2, "End of Three-Phase Shunt")
