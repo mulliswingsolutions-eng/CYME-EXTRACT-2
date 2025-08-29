@@ -4,6 +4,8 @@ from pathlib import Path
 from typing import List, Tuple, Optional
 import re
 import xml.etree.ElementTree as ET
+import re
+from typing import Optional
 
 # ================================
 # Editable constants
@@ -15,6 +17,23 @@ _GP_BLOCK_RE = re.compile(
     r"<GlobalParameters\b[^>]*>(.*?)</GlobalParameters>",
     re.DOTALL | re.IGNORECASE,
 )
+
+_INVALID_RE = re.compile(r"[^A-Za-z0-9_]+")
+def safe_name(s: Optional[str]) -> str:
+    """
+    Sanitize identifiers:
+      - '-'  -> '__'   (so '6124-19' becomes '6124__19')
+      - all other non [A-Za-z0-9_] -> '_'
+      - collapse runs of 3+ underscores to a single '_' (preserves '__')
+      - trim leading/trailing underscores
+    """
+    s = (s or "").strip()
+    if not s:
+        return ""
+    s = s.replace("-", "__")               # special rule
+    s = _INVALID_RE.sub("_", s)            # everything else -> '_'
+    s = re.sub(r"_{3,}", "_", s)           # collapse 3+ underscores, keep '__'
+    return s.strip("_")
 
 def _to_float(x: Optional[str]) -> Optional[float]:
     if x is None:

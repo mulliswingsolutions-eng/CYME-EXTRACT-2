@@ -4,26 +4,13 @@ from pathlib import Path
 from typing import Dict, List, Set
 import re
 import xml.etree.ElementTree as ET
+from Modules.General import safe_name
 
 PHASES = ("A", "B", "C")
 
 
 def _read_xml(path: Path) -> ET.Element:
     return ET.fromstring(path.read_text(encoding="utf-8", errors="ignore"))
-
-
-# ---------- NEW: name sanitizer (removes '-' and any non [A-Za-z0-9_]) ----------
-_SAFE_RE = re.compile(r"[^A-Za-z0-9_]+")
-
-def _safe_name(s: str | None) -> str:
-    """Return an identifier made of [A-Za-z0-9_] only (no hyphens)."""
-    s = (s or "").strip()
-    if not s:
-        return ""
-    s = _SAFE_RE.sub("_", s)      # replace disallowed chars (incl. '-') with _
-    s = re.sub(r"_+", "_", s)     # collapse repeats
-    return s.strip("_")           # trim leading/trailing _
-
 
 def _phase_set(s: str | None) -> Set[str]:
     p = (s or "ABC").strip().upper()
@@ -43,14 +30,14 @@ def _has_any(sec: ET.Element, tags: List[str]) -> bool:
 def _local_pseudos(sec: ET.Element) -> Set[str]:
     """Identifiers local to this section only (used to detect local pseudo 'To' nodes)."""
     pseudos: Set[str] = set()
-    sid = _safe_name(sec.findtext("./SectionID"))
+    sid = safe_name(sec.findtext("./SectionID"))
     if sid:
         pseudos.add(sid)
     devs = sec.find("./Devices")
     if devs is not None:
         for dev in list(devs):
-            dn = _safe_name(dev.findtext("DeviceNumber"))
-            di = _safe_name(dev.findtext("DeviceID"))
+            dn = safe_name(dev.findtext("DeviceNumber"))
+            di = safe_name(dev.findtext("DeviceID"))
             if dn:
                 pseudos.add(dn)
             if di:
@@ -64,11 +51,15 @@ def _parse_bus_rows(input_path: Path) -> List[Dict]:
 
     Columns:
       Bus | Base Voltage (V) | Initial Vmag | Unit | Angle | Type
+
+    NEW: Buses that have no ACTIVE connections are prefixed with '//' to comment them out.
+         An ACTIVE connection is one that would NOT be commented out on the Line sheet,
+         i.e., both endpoints exist on the Bus sheet (no *_unknown endpoints).
     """
     root = _read_xml(Path(input_path))
 
     # --- Slack/source info (sanitize node id) ---
-    source_node = _safe_name(root.findtext(".//Sources/Source/SourceNodeID"))
+    source_node = safe_name(root.findtext(".//Sources/Source/SourceNodeID"))
 
     eq = root.find(
         ".//Sources/Source/EquivalentSourceModels/EquivalentSourceModel/EquivalentSource"
@@ -94,7 +85,7 @@ def _parse_bus_rows(input_path: Path) -> List[Dict]:
         "C": _f(eq.findtext("OperatingAngle3")),
     }
 
-    # -------- PASS 1: scan all sections to determine real endpoints & pseudo candidates
+    # -------- PASS 1: scan all sections to determine endpoints/usage and detect local pseudos
     BRANCH_TAGS = [
         # Overhead / Underground lines (all flavors)
         "OverheadLine", "OverheadLineUnbalanced", "OverheadByPhase",
@@ -114,11 +105,14 @@ def _parse_bus_rows(input_path: Path) -> List[Dict]:
     to_count_nonlocal: Dict[str, int] = {}       # times a node is To in a section where it's NOT local pseudo
     local_pseudo_to_candidates: Set[str] = set() # ToNodeIDs equal to local SectionID/DeviceNumber/DeviceID (sanitized)
 
+    # We still gather a "raw" degree during scan, but final "active" usage is computed later.
+    raw_degree: Dict[str, int] = {}
+
     for sec in root.findall(".//Sections/Section"):
         f_raw = (sec.findtext("./FromNodeID") or "").strip()
         t_raw = (sec.findtext("./ToNodeID") or "").strip()
-        f = _safe_name(f_raw)
-        t = _safe_name(t_raw)
+        f = safe_name(f_raw)
+        t = safe_name(t_raw)
 
         if f:
             all_from_nodes.add(f)
@@ -136,8 +130,10 @@ def _parse_bus_rows(input_path: Path) -> List[Dict]:
         if has_branch:
             if f:
                 branch_endpoints.add(f)
+                raw_degree[f] = raw_degree.get(f, 0) + 1
             if t:
                 branch_endpoints.add(t)
+                raw_degree[t] = raw_degree.get(t, 0) + 1
             # local pseudo test for the To side of this branch
             if t:
                 lp = _local_pseudos(sec)  # already sanitized inside
@@ -147,9 +143,16 @@ def _parse_bus_rows(input_path: Path) -> List[Dict]:
                     to_count_nonlocal[t] = to_count_nonlocal.get(t, 0) + 1
 
         if has_spot or has_shunt:
-            # candidate true device terminals (we'll refine after the scan)
+            # treat the network side (FromNodeID) as a usage (bump raw_degree)
+            if f:
+                raw_degree[f] = raw_degree.get(f, 0) + 1
+            # ToNodeID on device sections often refers to a local pseudo terminal — don't bump degree on t
             if t:
                 device_terminal_candidates.add(t)
+
+    # Count the source bus as used (raw)
+    if source_node:
+        raw_degree[source_node] = raw_degree.get(source_node, 0) + 1
 
     # Refined exclusions
     terminal_exclusions_1: Set[str] = {
@@ -162,7 +165,7 @@ def _parse_bus_rows(input_path: Path) -> List[Dict]:
 
     # -------- PASS 2: build node -> phases map with refined exclusions
     def _is_real_bus(nid: str | None) -> bool:
-        nid = _safe_name(nid)
+        nid = safe_name(nid)
         if not nid:
             return False
         if nid in terminal_exclusions:
@@ -172,7 +175,7 @@ def _parse_bus_rows(input_path: Path) -> List[Dict]:
     node_phases: Dict[str, Set[str]] = {}
 
     def _add(nid: str | None, pstr: str) -> None:
-        nid = _safe_name(nid)
+        nid = safe_name(nid)
         if not _is_real_bus(nid):
             return
         s = node_phases.setdefault(nid, set())
@@ -201,23 +204,63 @@ def _parse_bus_rows(input_path: Path) -> List[Dict]:
             _add(t, ph)
             continue
 
-        # Fallback: conservative
+        # Fallback: conservative (may create buses with no active usage)
         _add(f, ph)
 
     if source_node:
         node_phases.setdefault(source_node, set()).update(PHASES)
 
-    # Emit rows
+    # -------- PASS 3: compute ACTIVE usage based on the set of buses that WILL exist
+    #                  on the Bus sheet (i.e., the keys of node_phases). Any branch
+    #                  whose endpoint is missing from this set would be commented out
+    #                  on the Line sheet (because that endpoint would be *_unknown),
+    #                  so it does NOT contribute to active usage.
+    known_bases: Set[str] = set(node_phases.keys())
+
+    active_degree: Dict[str, int] = {}
+
+    for sec in root.findall(".//Sections/Section"):
+        f = safe_name(sec.findtext("./FromNodeID"))
+        t = safe_name(sec.findtext("./ToNodeID"))
+
+        has_branch = _has_any(sec, BRANCH_TAGS)
+        has_spot   = sec.find(".//Devices/SpotLoad") is not None
+        has_shunt  = (
+            sec.find(".//Devices/ShuntCapacitor") is not None
+            or sec.find(".//Devices/ShuntReactor") is not None
+        )
+
+        if has_branch:
+            # Only count as ACTIVE if BOTH endpoints will exist on Bus sheet
+            if f and t and (f in known_bases) and (t in known_bases):
+                active_degree[f] = active_degree.get(f, 0) + 1
+                active_degree[t] = active_degree.get(t, 0) + 1
+            # else: would be commented in Line sheet (due to *_unknown), so ignore
+
+        if has_spot or has_shunt:
+            # Count the network side only if that bus will exist
+            if f and (f in known_bases):
+                active_degree[f] = active_degree.get(f, 0) + 1
+
+    # Ensure the source bus is kept active
+    if source_node and (source_node in known_bases):
+        active_degree[source_node] = active_degree.get(source_node, 0) + 1
+
+    # -------- Emit rows (comment out buses with active_degree == 0)
     def pkey(p: str) -> int:
         return PHASES.index(p)
 
     rows: List[Dict] = []
     for node in sorted(node_phases):
+        is_active = active_degree.get(node, 0) > 0
         for ph in sorted(node_phases[node], key=pkey):
+            bus_name = f"{node}_{ph.lower()}"
+            if not is_active:
+                bus_name = "//" + bus_name  # <--- comment out unused (no ACTIVE connections)
             v_ln = phase_v_kv[ph] * 1000.0
             rows.append(
                 {
-                    "Bus": f"{node}_{ph.lower()}",
+                    "Bus": bus_name,
                     "Base Voltage (V)": v_ln,
                     "Initial Vmag": v_ln,
                     "Unit": "V",

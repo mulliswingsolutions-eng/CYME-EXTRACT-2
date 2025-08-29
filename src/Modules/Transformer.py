@@ -4,7 +4,7 @@ from pathlib import Path
 import re
 import xml.etree.ElementTree as ET
 from typing import Dict, List, Tuple, Any, Optional
-
+from Modules.General import safe_name
 
 # ------------------------
 # Small helpers
@@ -25,16 +25,6 @@ def _f(x: Optional[str]) -> Optional[float]:
         return float(xs)
     except Exception:
         return None
-
-# ---- NEW: sanitize identifiers (remove '-' and anything not [A-Za-z0-9_]) ----
-_SAFE_RE = re.compile(r"[^A-Za-z0-9_]+")
-def _safe_name(s: str | None) -> str:
-    s = (s or "").strip()
-    if not s:
-        return ""
-    s = _SAFE_RE.sub("_", s)
-    s = re.sub(r"_+", "_", s)
-    return s.strip("_")
 
 
 def _phase_count(phase_str: str) -> int:
@@ -68,7 +58,7 @@ def _decode_conn(code: str) -> Tuple[str, str]:
 
 def _bus_labels(bus: str, phase_str: str) -> Tuple[str, str, str]:
     # sanitize bus before composing phase-specific labels
-    bus = _safe_name(bus)
+    bus = safe_name(bus)
     s = (phase_str or "ABC").upper()
     labs = []
     for p in "ABC":
@@ -212,8 +202,8 @@ def _parse_multiphase_2w_rows(input_path: Path) -> List[List[Any]]:
         phase        = _t(sec.findtext("Phase") or "ABC").upper()
 
         # sanitized for output / IDs
-        from_bus = _safe_name(from_bus_raw)
-        to_bus   = _safe_name(to_bus_raw)
+        from_bus = safe_name(from_bus_raw)
+        to_bus   = safe_name(to_bus_raw)
 
         status_text = _t(xf.findtext("ConnectionStatus") or "Connected").lower()
         status = 1 if status_text == "connected" else 0
@@ -254,7 +244,7 @@ def _parse_multiphase_2w_rows(input_path: Path) -> List[List[Any]]:
         b2a, b2b, b2c = _bus_labels(to_bus, phase)
 
         # sanitized row ID
-        rid = _safe_name(f"TR1_{from_bus}_{to_bus}")
+        rid = safe_name(f"TR1_{from_bus}_{to_bus}")
 
         rows.append([
             rid, status, _phase_count(phase),

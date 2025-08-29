@@ -1,12 +1,6 @@
 # To change:
-# 1. Remove 12.47 Feeders as sources (done)
-# 2. Check out constant current loads (done)
-# 3. Double check load values (Done)
-# 5. Number of taps on transformers (Done)
-# 6. Missing taps on transformers (Done)
-# 7. SLACK needs to be capitalized (Done)
-# 8. No 0s in line data (Postponed)
-# 9. Remove all '-' 
+# No 0s in line data (Postponed)
+
 
 # src/main.py
 from __future__ import annotations
@@ -14,7 +8,7 @@ from pathlib import Path
 import pandas as pd  # needed for ExcelWriter (modules expect xw.book / xw.sheets)
 
 # Local imports
-from Modules.Explorer import write_overview_sheet
+from Modules.IslandChecker import log_islands
 from Modules.General import write_general_sheet
 from Modules.Pins import write_pins_sheet
 from Modules.Bus import write_bus_sheet
@@ -36,8 +30,8 @@ from Modules.Switch import write_switch_sheet
 #INPUT_PATH = Path(__file__).parent.parent / "Examples/Saint-John-CYME.txt"
 #OUTPUT_PATH = Path(__file__).parent.parent / "Outputs/CYME_Extract_Saint-John.xlsx"
 
-#INPUT_PATH = Path(__file__).parent.parent / "Examples/UNB Feeder.txt"
-#OUTPUT_PATH = Path(__file__).parent.parent / "Outputs/CYME_Extract_UNB.xlsx"
+INPUT_PATH = Path(__file__).parent.parent / "Examples/UNB Feeder.txt"
+OUTPUT_PATH = Path(__file__).parent.parent / "Outputs/CYME_Extract_UNB.xlsx"
 
 #INPUT_PATH = Path(__file__).parent.parent / "Examples/UNB Feeders_reduced.txt"
 #OUTPUT_PATH = Path(__file__).parent.parent / "Outputs/CYME_Extract_UNB_reduced.xlsx"
@@ -46,21 +40,25 @@ from Modules.Switch import write_switch_sheet
 #OUTPUT_PATH = Path(__file__).parent.parent / "Outputs/CYME_Extract_UNB_reduced_aberdeen.xlsx"
 
 #INPUT_PATH = Path(__file__).parent.parent / "Examples/UNB Feeders_reduced_preistman.txt"
-#UTPUT_PATH = Path(__file__).parent.parent / "Outputs/CYME_Extract_UNB_reduced_preistman.xlsx"
+#OUTPUT_PATH = Path(__file__).parent.parent / "Outputs/CYME_Extract_UNB_reduced_preistman.xlsx"
 
 #INPUT_PATH = Path(__file__).parent.parent / "Examples/UNB Feeders_reduced_preistman_A.txt"
 #OUTPUT_PATH = Path(__file__).parent.parent / "Outputs/CYME_Extract_UNB_reduced_preistman_A.xlsx"
 
-INPUT_PATH = Path(__file__).parent.parent / "Examples/IEEE_34_node_test_feeder_modified.txt"
-OUTPUT_PATH = Path(__file__).parent.parent / "Outputs/IEEE_34_node_test_feeder_modified.xlsx"
+#INPUT_PATH = Path(__file__).parent.parent / "Examples/IEEE_34_node_test_feeder_modified.txt"
+#OUTPUT_PATH = Path(__file__).parent.parent / "Outputs/IEEE_34_node_test_feeder_modified.xlsx"
+
+#INPUT_PATH = Path(__file__).parent.parent / "Examples/UNB Feeders_simple.txt"
+#OUTPUT_PATH = Path(__file__).parent.parent / "Outputs/CYME_Extract_UNB_simple.xlsx"
 
 # ====================================
-
 
 def main():
     in_path = INPUT_PATH.resolve()
     out_path = OUTPUT_PATH.resolve()
     out_path.parent.mkdir(parents=True, exist_ok=True)
+
+    log_islands(Path(in_path))
 
     if not in_path.exists():
         raise FileNotFoundError(f"Input not found: {in_path}")
@@ -68,7 +66,6 @@ def main():
     # Create workbook and let each module render its own sheet
     with pd.ExcelWriter(out_path, engine="xlsxwriter") as xw:
         write_general_sheet(xw, in_path)
-        #write_overview_sheet(xw, in_path)
         write_pins_sheet(xw, in_path)
         write_bus_sheet(xw, in_path)
         write_voltage_source_sheet(xw, in_path)
@@ -77,6 +74,7 @@ def main():
         write_transformer_sheet(xw, in_path)
         write_switch_sheet(xw, in_path)
         write_shunt_sheet(xw, in_path)
+
 
     print(f"Wrote: {out_path}")
 

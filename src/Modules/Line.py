@@ -5,21 +5,31 @@ from pathlib import Path
 import xml.etree.ElementTree as ET
 from typing import Dict, List, Optional, Tuple
 import re
+from Modules.Bus import extract_bus_data  # <-- reuse Bus page logic
+from Modules.General import safe_name
+
 
 # ---- constants / small helpers ----
 MI_PER_M = 0.000621371192
 MI_PER_KM = 0.621371192  # multiply (per-km) to get per-mile
 PHASE_SUFFIX = {"A": "_a", "B": "_b", "C": "_c"}
 
-# sanitize: allow only letters, digits, underscore
-_SAFE_RE = re.compile(r"[^A-Za-z0-9_]+")
-def _safe_name(s: Optional[str]) -> str:
-    s = (s or "").strip()
-    if not s:
-        return ""
-    s = _SAFE_RE.sub("_", s)
-    s = re.sub(r"_+", "_", s)
-    return s.strip("_")
+_PHASE_SUFFIX_RE = re.compile(r"_(a|b|c)$")
+def _bus_base_set_from_bus_sheet(input_path: Path) -> set[str]:
+    """
+    Build the set of *base* bus names that appear on the Bus sheet
+    (strip the trailing _a/_b/_c phase suffix).
+    """
+    bases: set[str] = set()
+    for row in extract_bus_data(input_path):
+        b = str(row.get("Bus", "")).strip()
+        if not b:
+            continue
+        base = _PHASE_SUFFIX_RE.sub("", b)
+        bases.add(base)
+    return bases
+
+
 
 
 def _f(s: Optional[str]) -> float:
@@ -97,8 +107,8 @@ def _iter_lines(root: ET.Element):
         phase        = (sec.findtext("Phase") or "").strip().upper() or "ABC"
 
         # sanitize bus names for output/IDs
-        from_bus = _safe_name(from_bus_raw)
-        to_bus   = _safe_name(to_bus_raw)
+        from_bus = safe_name(from_bus_raw)
+        to_bus   = safe_name(to_bus_raw)
         row_id   = f"LN_{from_bus}_{to_bus}"
 
         # OverheadLineUnbalanced
@@ -242,13 +252,15 @@ def _series_shunt_for_pair(dbvals: Dict[str, float], p1: str, p2: Optional[str] 
 
 # ---- sheet writer ----
 def write_line_sheet(xw, input_path: Path) -> None:
-    """
-    Create the 'Line' sheet using xlsxwriter via the ExcelWriter already open in main.
-    All output bus names and IDs are sanitized to [A-Za-z0-9_].
-    """
-    # Parse XML once
     root = ET.fromstring(Path(input_path).read_text(encoding="utf-8", errors="ignore"))
     dbmap = _read_line_db_map(root)
+
+    # Build known bus set from the Bus sheet logic
+    known_buses = _bus_base_set_from_bus_sheet(input_path)
+
+    def _mark_unknown(bus_base: str) -> str:
+        # bus_base is sanitized already by pipeline
+        return bus_base if bus_base in known_buses else f"{bus_base}_unknown"
 
     single_rows: List[List[object]] = []
     two_rows: List[List[object]] = []
@@ -257,8 +269,17 @@ def write_line_sheet(xw, input_path: Path) -> None:
     for item in _iter_lines(root):
         phase = item["phase"]
         from_bus, to_bus = item["from"], item["to"]
+
+        # Rewrite unknown endpoints
+        from_bus = _mark_unknown(from_bus)
+        to_bus   = _mark_unknown(to_bus)
+
+        # If either endpoint is unknown, prefix '//' to ID to comment it out
+        unknown = from_bus.endswith("_unknown") or to_bus.endswith("_unknown")
+        id_out = ("//" if unknown else "") + item["id"]
+
         length_mi = (item["length_m"] or 0.0) * MI_PER_M
-        status = 1  # connected in the file
+        status = 1
 
         # --- pick DB values BEFORE computing rows ---
         dbid = item["line_id"]
@@ -276,7 +297,7 @@ def write_line_sheet(xw, input_path: Path) -> None:
             p = phase
             r11, x11, b11, *_ = _series_shunt_for_pair(dbvals, p)
             single_rows.append([
-                item["id"], status, length_mi,
+                id_out, status, length_mi,
                 f"{from_bus}{PHASE_SUFFIX[p]}",
                 f"{to_bus}{PHASE_SUFFIX[p]}",
                 r11, x11, b11
@@ -286,7 +307,7 @@ def write_line_sheet(xw, input_path: Path) -> None:
             p1, p2 = phase[0], phase[1]
             r11, x11, b11, r21, x21, b21, r22, x22, b22 = _series_shunt_for_pair(dbvals, p1, p2)
             two_rows.append([
-                item["id"], status, length_mi,
+                id_out, status, length_mi,
                 f"{from_bus}{PHASE_SUFFIX[p1]}", f"{from_bus}{PHASE_SUFFIX[p2]}",
                 f"{to_bus}{PHASE_SUFFIX[p1]}",   f"{to_bus}{PHASE_SUFFIX[p2]}",
                 r11, x11, r21, x21, r22, x22, b11, b21, b22
@@ -316,7 +337,7 @@ def write_line_sheet(xw, input_path: Path) -> None:
                 b11 = b22 = b33 = b_s; b21 = b31 = b32 = b_m
 
             three_full_rows.append([
-                item["id"], status, length_mi,
+                id_out, status, length_mi,
                 f"{from_bus}_a", f"{from_bus}_b", f"{from_bus}_c",
                 f"{to_bus}_a",   f"{to_bus}_b",   f"{to_bus}_c",
                 r11, x11, r21, x21, r22, x22, r31, x31, r32, x32, r33, x33,

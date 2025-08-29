@@ -1,37 +1,56 @@
 # Modules/Pins.py
 from __future__ import annotations
 from pathlib import Path
+import re
 import xml.etree.ElementTree as ET
 from typing import Dict, List, Set, Tuple
+
+from Modules.General import safe_name              # <- centralized sanitizer (- -> __, etc.)
+from Modules.Bus import extract_bus_data        # <- to get which buses actually exist on Bus sheet
 
 PHASES = ("A", "B", "C")
 SUFFIX = {"A": "_a", "B": "_b", "C": "_c"}
 
+_PHASE_SUFFIX_RE = re.compile(r"_(a|b|c)$")
+
+def _base_bus_name(bus_or_bus_phase: str) -> str:
+    """
+    Strip optional '//' comment and trailing phase suffix to obtain the base bus name.
+    """
+    s = (bus_or_bus_phase or "").strip()
+    if s.startswith("//"):
+        s = s[2:]
+    return _PHASE_SUFFIX_RE.sub("", s)
+
+
 # ---------- Parsing helpers (all derived from the file) ----------
 
 def _bus_phases(root: ET.Element) -> Dict[str, Set[str]]:
-    """Collect phases present at each bus by scanning all Sections."""
+    """Collect phases present at each bus by scanning all Sections (sanitized)."""
     bus_ph: Dict[str, Set[str]] = {}
     for sec in root.findall(".//Section"):
         ph = (sec.findtext("Phase") or "ABC").upper()
         if not any(p in PHASES for p in ph):
             ph = "ABC"
         for tag in ("FromNodeID", "ToNodeID"):
-            bus = (sec.findtext(tag) or "").strip()
-            if not bus:
+            bus_raw = (sec.findtext(tag) or "").strip()
+            if not bus_raw:
                 continue
+            bus = safe_name(bus_raw)
             bus_ph.setdefault(bus, set()).update([p for p in PHASES if p in ph])
     return bus_ph
 
 
 def _loads_by_bus(root: ET.Element) -> Dict[str, int]:
-    """Return bus -> number_of_phases_with_values (for PQ pins)."""
+    """Return bus -> number_of_phases_with_values (for PQ pins), using sanitized bus names."""
     out: Dict[str, int] = {}
     for sec in root.findall(".//Section"):
         spot = sec.find(".//Devices/SpotLoad")
         if spot is None:
             continue
-        bus = (sec.findtext("FromNodeID") or "").strip()
+        bus = safe_name((sec.findtext("FromNodeID") or "").strip())
+        if not bus:
+            continue
         phases = set()
         for val in spot.findall(".//CustomerLoadValue"):
             p = (val.findtext("Phase") or "").strip().upper()
@@ -42,10 +61,11 @@ def _loads_by_bus(root: ET.Element) -> Dict[str, int]:
 
 
 def _shunt_buses(root: ET.Element) -> Set[str]:
+    """Set of buses that host shunt capacitors (sanitized)."""
     out: Set[str] = set()
     for sec in root.findall(".//Section"):
         if sec.find(".//Devices/ShuntCapacitor") is not None:
-            bus = (sec.findtext("FromNodeID") or "").strip()
+            bus = safe_name((sec.findtext("FromNodeID") or "").strip())
             if bus:
                 out.add(bus)
     return out
@@ -53,7 +73,7 @@ def _shunt_buses(root: ET.Element) -> Set[str]:
 
 def _xfmr_secondary_buses(root: ET.Element) -> Set[str]:
     """
-    Identify transformer sections and mark the *secondary* bus.
+    Identify transformer sections and mark the *secondary* bus (sanitized).
     We infer the secondary as the node opposite NormalFeedingNodeID
     (falling back to ToNodeID).
     """
@@ -62,9 +82,9 @@ def _xfmr_secondary_buses(root: ET.Element) -> Set[str]:
         xf = sec.find(".//Devices/Transformer")
         if xf is None:
             continue
-        from_bus = (sec.findtext("FromNodeID") or "").strip()
-        to_bus   = (sec.findtext("ToNodeID") or "").strip()
-        normal   = (xf.findtext("NormalFeedingNodeID") or "").strip()
+        from_bus = safe_name((sec.findtext("FromNodeID") or "").strip())
+        to_bus   = safe_name((sec.findtext("ToNodeID") or "").strip())
+        normal   = safe_name((xf.findtext("NormalFeedingNodeID") or "").strip())
         if normal and normal == from_bus and to_bus:
             second = to_bus
         elif normal and normal == to_bus and from_bus:
@@ -78,16 +98,19 @@ def _xfmr_secondary_buses(root: ET.Element) -> Set[str]:
 
 def _line_sections(root: ET.Element) -> List[Tuple[str, str, int]]:
     """
-    Return list of (from_bus, to_bus, nphases) for all line-like devices.
+    Return list of (from_bus, to_bus, nphases) for line-like devices (sanitized).
+    Currently considers OverheadLineUnbalanced and OverheadByPhase.
     """
     out: List[Tuple[str, str, int]] = []
     for sec in root.findall(".//Section"):
-        # Accept all line types we’ve been using
         if not (sec.find(".//Devices/OverheadLineUnbalanced") is not None or
-                sec.find(".//Devices/OverheadByPhase") is not None):
+                sec.find(".//Devices/OverheadByPhase") is not None or
+                sec.find(".//Devices/OverheadLine") is not None or
+                sec.find(".//Devices/Underground") is not None or
+                sec.find(".//Devices/UndergroundCable") is not None):
             continue
-        fb = (sec.findtext("FromNodeID") or "").strip()
-        tb = (sec.findtext("ToNodeID") or "").strip()
+        fb = safe_name((sec.findtext("FromNodeID") or "").strip())
+        tb = safe_name((sec.findtext("ToNodeID") or "").strip())
         ph = (sec.findtext("Phase") or "ABC").upper()
         nph = sum(1 for p in PHASES if p in ph) or 3
         if fb and tb:
@@ -96,14 +119,14 @@ def _line_sections(root: ET.Element) -> List[Tuple[str, str, int]]:
 
 
 def _transformer_pairs(root: ET.Element) -> List[Tuple[str, str, int]]:
-    """Return list of (from_bus, to_bus, nphases) for transformers (for tap pins)."""
+    """Return list of (from_bus, to_bus, nphases) for transformers (for tap pins), sanitized."""
     out: List[Tuple[str, str, int]] = []
     for sec in root.findall(".//Section"):
         xf = sec.find(".//Devices/Transformer")
         if xf is None:
             continue
-        fb = (sec.findtext("FromNodeID") or "").strip()
-        tb = (sec.findtext("ToNodeID") or "").strip()
+        fb = safe_name((sec.findtext("FromNodeID") or "").strip())
+        tb = safe_name((sec.findtext("ToNodeID") or "").strip())
         ph = (sec.findtext("Phase") or "ABC").upper()
         nph = sum(1 for p in PHASES if p in ph) or 3
         if fb and tb:
@@ -115,7 +138,7 @@ def _transformer_pairs(root: ET.Element) -> List[Tuple[str, str, int]]:
 
 def _voltage_bus_set(root: ET.Element) -> Set[str]:
     """
-    Build the set of buses for V_abs/V_ang pins:
+    Build the set of buses for V_abs/V_ang pins (sanitized):
       - buses with SpotLoad(s)
       - buses with ShuntCapacitor(s)
       - transformer secondary buses
@@ -154,16 +177,37 @@ def write_pins_sheet(xw, input_path: Path) -> None:
       incoming  Trans_tap TR1_from_to/tap_# ...
       incoming  PQ_ld   LD_<bus>/P# LD_<bus>/Q# ...
 
-    All content is discovered from the file — no hardcoded IDs.
+    Protections:
+      - All bus/ID strings are sanitized via safe_name (so '-' -> '__', etc.).
+      - Pins only reference buses/lines that will actually exist on the Bus sheet
+        (i.e., both endpoints are known; anything that would be *_unknown on Line is skipped).
     """
     root = ET.fromstring(input_path.read_text(encoding="utf-8", errors="ignore"))
 
-    # Discovery
+    # ---------- determine which buses will exist on the Bus sheet ----------
+    bus_rows = extract_bus_data(input_path)
+    known_bases: Set[str] = set()
+    for row in bus_rows:
+        bus_field = str(row.get("Bus", "")).strip()
+        if not bus_field:
+            continue
+        base = _base_bus_name(bus_field)  # strip '//' and phase suffix
+        if base:
+            known_bases.add(base)
+
+    # Discovery (all sanitized by helpers above)
     bus_ph = _bus_phases(root)                  # bus -> phases present
     v_buses = _voltage_bus_set(root)            # selected buses for voltage pins
     lines = _line_sections(root)                # all line sections (for currents)
     load_phase_counts = _loads_by_bus(root)     # bus -> number of load phases
     xf_pairs = _transformer_pairs(root)         # (from,to,nph)
+
+    # Filter to only known Bus-sheet bases
+    v_buses = {b for b in v_buses if b in known_bases}
+    bus_ph = {b: phs for b, phs in bus_ph.items() if b in known_bases}
+    lines = [(fb, tb, nph) for (fb, tb, nph) in lines if fb in known_bases and tb in known_bases]
+    load_phase_counts = {b: n for b, n in load_phase_counts.items() if b in known_bases}
+    xf_pairs = [(fb, tb, nph) for (fb, tb, nph) in xf_pairs if fb in known_bases and tb in known_bases]
 
     # Writer setup
     wb = xw.book
@@ -198,9 +242,6 @@ def write_pins_sheet(xw, input_path: Path) -> None:
     # ---- outgoing: I_abs (From side currents) ----
     iabs = ["//outgoing", "I_abs"]
     for fb, tb, nph in sorted(lines):
-        # include line if its from-bus is in the selected voltage set
-        if fb not in v_buses:
-            continue
         tag = f"LN_{fb}_{tb}"
         for idx in range(1, nph + 1):
             iabs.append(f"{tag}/ImagFrom{idx}")
@@ -209,8 +250,6 @@ def write_pins_sheet(xw, input_path: Path) -> None:
     # ---- outgoing: I_ang (From side angles) ----
     iang = ["//outgoing", "I_ang"]
     for fb, tb, nph in sorted(lines):
-        if fb not in v_buses:
-            continue
         tag = f"LN_{fb}_{tb}"
         for idx in range(1, nph + 1):
             iang.append(f"{tag}/IangFrom{idx}")
@@ -228,7 +267,7 @@ def write_pins_sheet(xw, input_path: Path) -> None:
             pq_out.append(f"{base}/Q{idx}")
     row(pq_out)
 
-    # ---- incoming: Trans_tap (all transformers) ----
+    # ---- incoming: Trans_tap (all transformers with known endpoints) ----
     taps = ["//incoming", "Trans_tap"]
     for fb, tb, nph in sorted(xf_pairs):
         base = f"TR1_{fb}_{tb}"

@@ -4,20 +4,10 @@ from pathlib import Path
 import xml.etree.ElementTree as ET
 from typing import List, Dict, Any
 import re
+from Modules.General import safe_name
 
 PHASE_SUFFIX = {"A": "_a", "B": "_b", "C": "_c"}
 PHASES = ("A", "B", "C")
-
-# --- NEW: sanitize identifiers (allow only [A-Za-z0-9_]) ---
-_SAFE_RE = re.compile(r"[^A-Za-z0-9_]+")
-def _safe_name(s: str | None) -> str:
-    s = (s or "").strip()
-    if not s:
-        return ""
-    s = _SAFE_RE.sub("_", s)       # replace disallowed chars with "_"
-    s = re.sub(r"_+", "_", s)      # collapse multiple underscores
-    return s.strip("_")            # trim leading/trailing underscores
-
 
 def _cap_id(from_node: str, device_number: str) -> str:
     """
@@ -25,8 +15,8 @@ def _cap_id(from_node: str, device_number: str) -> str:
     We extract digits from the sanitized FromNodeID or DeviceNumber.
     If none, fall back to a sanitized identifier (no dashes/spaces).
     """
-    fn = _safe_name(from_node)
-    dn = _safe_name(device_number)
+    fn = safe_name(from_node)
+    dn = safe_name(device_number)
     s = "".join(ch for ch in (fn or dn or "") if ch.isdigit())
     return f"cap{s}" if s else (dn or fn or "cap")
 
@@ -52,12 +42,12 @@ def _parse_shunts(txt_path: Path):
             continue
 
         from_bus_raw = (sec.findtext("FromNodeID") or "").strip()
-        from_bus = _safe_name(from_bus_raw)
+        from_bus = safe_name(from_bus_raw)
 
         phase = (sec.findtext("Phase") or "ABC").strip().upper()
 
         devnum_raw = (dev.findtext("DeviceNumber") or "").strip()
-        devnum = _safe_name(devnum_raw)
+        devnum = safe_name(devnum_raw)
 
         status = 1 if (dev.findtext("ConnectionStatus") or "Connected").strip().lower() == "connected" else 0
         kvln = dev.findtext("KVLN")

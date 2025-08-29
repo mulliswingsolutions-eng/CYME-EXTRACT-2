@@ -4,22 +4,13 @@ from pathlib import Path
 import xml.etree.ElementTree as ET
 from typing import List, Dict, Any, Optional
 import re
-
-# --- sanitizers (no '-' allowed) ---
-_SAFE_RE = re.compile(r"[^A-Za-z0-9_]+")
-def _safe_name(s: Optional[str]) -> str:
-    s = (s or "").strip()
-    if not s:
-        return ""
-    s = _SAFE_RE.sub("_", s)
-    s = re.sub(r"_+", "_", s)
-    return s.strip("_")
+from Modules.General import safe_name
 
 def _make_src_id(raw: str) -> str:
     """
     Sanitize and ensure single 'SRC_' prefix.
     """
-    name = _safe_name(raw)
+    name = safe_name(raw)
     if not name:
         return "SRC_?"
     return name if name.startswith("SRC_") else f"SRC_{name}"
@@ -38,7 +29,7 @@ def _get_source_id(src: ET.Element, node: str, model_index: int | None = None) -
         or (src.findtext("./SourceSettings/DeviceNumber") or "").strip()
         or (src.findtext("./SourceID") or "").strip()
     )
-    base = sid_raw if sid_raw else _safe_name(node)
+    base = sid_raw if sid_raw else safe_name(node)
     if model_index and model_index > 1:
         base = f"{base}_M{model_index}"   # underscore, not hyphen
     return _make_src_id(base)
@@ -134,7 +125,7 @@ def _parse_voltage_sources(path: Path) -> tuple[list[dict], list[dict]]:
         node_raw = (src.findtext("./SourceNodeID") or "").strip()
         if not node_raw:
             continue
-        node = _safe_name(node_raw)  # sanitize bus base name
+        node = safe_name(node_raw)  # sanitize bus base name
 
         models = src.findall("./EquivalentSourceModels/EquivalentSourceModel")
         if not models:

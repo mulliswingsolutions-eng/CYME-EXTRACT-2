@@ -7,21 +7,11 @@ import re
 import xml.etree.ElementTree as ET
 from collections import deque
 from typing import Dict, List, Tuple, Any, Set
+from Modules.General import safe_name
 
 PHASES = ("A", "B", "C")
 PHASE_SUFFIX = {"A": "_a", "B": "_b", "C": "_c"}
 EPS = 1e-6  # numerical zero
-
-# --- sanitize identifiers (allow only [A-Za-z0-9_]) ---
-_SAFE_RE = re.compile(r"[^A-Za-z0-9_]+")
-def _safe_name(s: str | None) -> str:
-    s = (s or "").strip()
-    if not s:
-        return ""
-    s = _SAFE_RE.sub("_", s)
-    s = re.sub(r"_+", "_", s)
-    return s.strip("_")
-
 
 def _read_xml(path: Path) -> ET.Element:
     return ET.fromstring(path.read_text(encoding="utf-8", errors="ignore"))
@@ -75,22 +65,22 @@ def _build_voltage_map(txt_path: Path) -> Dict[str, float]:
     G: Dict[str, Set[str]] = {}
 
     def add_edge(a_raw: str, b_raw: str) -> None:
-        a, b = _safe_name(a_raw), _safe_name(b_raw)
+        a, b = safe_name(a_raw), safe_name(b_raw)
         if not a or not b:
             return
         G.setdefault(a, set()).add(b)
         G.setdefault(b, set()).add(a)
 
     seeds: Dict[str, float] = {}
-    src_node = _safe_name(root.findtext(".//Sources/Source/SourceNodeID"))
+    src_node = safe_name(root.findtext(".//Sources/Source/SourceNodeID"))
     if src_node and kvll_default > 0:
         seeds[src_node] = kvll_default
 
     for sec in root.findall(".//Sections/Section"):
         f_raw = (sec.findtext("./FromNodeID") or "").strip()
         t_raw = (sec.findtext("./ToNodeID") or "").strip()
-        f = _safe_name(f_raw)
-        t = _safe_name(t_raw)
+        f = safe_name(f_raw)
+        t = safe_name(t_raw)
 
         has_spot = sec.find(".//Devices/SpotLoad") is not None
         has_dist = sec.find(".//Devices/DistributedLoad") is not None   # NEW: distributed
@@ -100,7 +90,7 @@ def _build_voltage_map(txt_path: Path) -> Dict[str, float]:
         xf = sec.find(".//Devices/Transformer")
         if xf is not None:
             dev_id = (xf.findtext("DeviceID") or "").strip()
-            normal = _safe_name(xf.findtext("NormalFeedingNodeID"))
+            normal = safe_name(xf.findtext("NormalFeedingNodeID"))
             vals = tdb.get(dev_id, {})
             kvp = vals.get("kvp") or 0.0
             kvs = vals.get("kvs") or 0.0
@@ -152,7 +142,7 @@ def _build_voltage_map(txt_path: Path) -> Dict[str, float]:
 # Load parsing
 # =======================
 def _sanitize_id(s: str) -> str:
-    return _safe_name(s)
+    return safe_name(s)
 
 
 def _norm_load_id(device_number: str, section_id: str, from_node_id: str) -> str:
@@ -272,8 +262,8 @@ def _parse_spot_and_distributed_loads(txt_path: Path) -> List[Dict[str, Any]]:
     out: List[Dict[str, Any]] = []
 
     for sec in root.findall(".//Sections/Section"):
-        section_id = _safe_name(sec.findtext("./SectionID"))
-        from_bus = _safe_name(sec.findtext("./FromNodeID"))
+        section_id = safe_name(sec.findtext("./SectionID"))
+        from_bus = safe_name(sec.findtext("./FromNodeID"))
         if not from_bus:
             continue
 
@@ -283,7 +273,7 @@ def _parse_spot_and_distributed_loads(txt_path: Path) -> List[Dict[str, Any]]:
             continue
 
         for dev in devices:
-            dev_num = _safe_name(dev.findtext("./DeviceNumber"))
+            dev_num = safe_name(dev.findtext("./DeviceNumber"))
             conn_cfg = (dev.findtext("./ConnectionConfiguration") or "").strip()
             # Status & type live under CustomerLoad
             status_txt = (dev.findtext(".//CustomerLoad/ConnectionStatus") or "").strip().lower()
