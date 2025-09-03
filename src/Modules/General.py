@@ -5,7 +5,7 @@ from typing import List, Tuple, Optional
 import re
 import xml.etree.ElementTree as ET
 import re
-from typing import Optional
+from typing import Optional, Any, Dict
 
 # ================================
 # Editable constants
@@ -18,6 +18,7 @@ _GP_BLOCK_RE = re.compile(
     re.DOTALL | re.IGNORECASE,
 )
 
+# --------------- Global Safe Name ---------------
 _INVALID_RE = re.compile(r"[^A-Za-z0-9_]+")
 def safe_name(s: Optional[str]) -> str:
     """
@@ -35,6 +36,18 @@ def safe_name(s: Optional[str]) -> str:
     s = re.sub(r"_{3,}", "_", s)           # collapse 3+ underscores, keep '__'
     return s.strip("_")
 
+# --------------- Global Island Context ---------------
+# Writers will read this to decide commenting and SLACK assignment.
+_ISLAND_CTX: Dict[str, Any] = {}
+
+def set_island_context(ctx: Dict[str, Any]) -> None:
+    global _ISLAND_CTX
+    _ISLAND_CTX = ctx or {}
+
+def get_island_context() -> Dict[str, Any]:
+    return _ISLAND_CTX
+
+# --------------- General Page ---------------
 def _to_float(x: Optional[str]) -> Optional[float]:
     if x is None:
         return None

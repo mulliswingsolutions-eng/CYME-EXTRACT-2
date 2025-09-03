@@ -8,7 +8,7 @@ from pathlib import Path
 import pandas as pd  # needed for ExcelWriter (modules expect xw.book / xw.sheets)
 
 # Local imports
-from Modules.IslandChecker import log_islands
+from Modules.IslandChecker import analyze_and_set_island_context
 from Modules.General import write_general_sheet
 from Modules.Pins import write_pins_sheet
 from Modules.Bus import write_bus_sheet
@@ -30,8 +30,11 @@ from Modules.Switch import write_switch_sheet
 #INPUT_PATH = Path(__file__).parent.parent / "Examples/Saint-John-CYME.txt"
 #OUTPUT_PATH = Path(__file__).parent.parent / "Outputs/CYME_Extract_Saint-John.xlsx"
 
-INPUT_PATH = Path(__file__).parent.parent / "Examples/UNB Feeder.txt"
-OUTPUT_PATH = Path(__file__).parent.parent / "Outputs/CYME_Extract_UNB.xlsx"
+#INPUT_PATH = Path(__file__).parent.parent / "Examples/UNB Feeder.txt"
+#OUTPUT_PATH = Path(__file__).parent.parent / "Outputs/CYME_Extract_UNB.xlsx"
+
+INPUT_PATH = Path(__file__).parent.parent / "Examples/UNB Feeders_modified.txt"
+OUTPUT_PATH = Path(__file__).parent.parent / "Outputs/CYME_Extract_UNB_modified.xlsx"
 
 #INPUT_PATH = Path(__file__).parent.parent / "Examples/UNB Feeders_reduced.txt"
 #OUTPUT_PATH = Path(__file__).parent.parent / "Outputs/CYME_Extract_UNB_reduced.xlsx"
@@ -58,7 +61,7 @@ def main():
     out_path = OUTPUT_PATH.resolve()
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    log_islands(Path(in_path))
+    analyze_and_set_island_context(Path(in_path), per_island_limit=50)  # prints vertical list; stores context
 
     if not in_path.exists():
         raise FileNotFoundError(f"Input not found: {in_path}")

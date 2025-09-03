@@ -5,7 +5,7 @@ from pathlib import Path
 import xml.etree.ElementTree as ET
 from typing import Dict, List, Optional, Tuple
 import re
-from Modules.Bus import extract_bus_data  # <-- reuse Bus page logic
+from Modules.Bus import extract_bus_data  # reuse Bus page logic (and comment filtering)
 from Modules.General import safe_name
 
 
@@ -15,21 +15,21 @@ MI_PER_KM = 0.621371192  # multiply (per-km) to get per-mile
 PHASE_SUFFIX = {"A": "_a", "B": "_b", "C": "_c"}
 
 _PHASE_SUFFIX_RE = re.compile(r"_(a|b|c)$")
+
 def _bus_base_set_from_bus_sheet(input_path: Path) -> set[str]:
     """
-    Build the set of *base* bus names that appear on the Bus sheet
-    (strip the trailing _a/_b/_c phase suffix).
+    Build the set of *active* base bus names that appear on the Bus sheet.
+    We skip commented rows (those with Bus starting with '//') and strip the trailing _a/_b/_c.
     """
     bases: set[str] = set()
     for row in extract_bus_data(input_path):
         b = str(row.get("Bus", "")).strip()
-        if not b:
-            continue
+        if not b or b.startswith("//"):
+            continue  # commented-out bus is NOT considered active/known
         base = _PHASE_SUFFIX_RE.sub("", b)
-        bases.add(base)
+        if base:
+            bases.add(base)
     return bases
-
-
 
 
 def _f(s: Optional[str]) -> float:
@@ -109,7 +109,7 @@ def _iter_lines(root: ET.Element):
         # sanitize bus names for output/IDs
         from_bus = safe_name(from_bus_raw)
         to_bus   = safe_name(to_bus_raw)
-        row_id   = f"LN_{from_bus}_{to_bus}"
+        row_id   = safe_name(f"LN_{from_bus}_{to_bus}")
 
         # OverheadLineUnbalanced
         olu = sec.find(".//Devices/OverheadLineUnbalanced")
@@ -150,8 +150,13 @@ def _iter_lines(root: ET.Element):
             }
             continue
 
-        # Underground variants (CableID preferred)
-        ug = sec.find(".//Devices/Underground") or sec.find(".//Devices/UndergroundCable")
+        # Underground variants
+        ug = (
+            sec.find(".//Devices/Underground")
+            or sec.find(".//Devices/UndergroundCable")
+            or sec.find(".//Devices/UndergroundCableUnbalanced")
+            or sec.find(".//Devices/UndergroundByPhase")
+        )
         if ug is not None:
             yield {
                 "type": "Underground",
@@ -255,7 +260,7 @@ def write_line_sheet(xw, input_path: Path) -> None:
     root = ET.fromstring(Path(input_path).read_text(encoding="utf-8", errors="ignore"))
     dbmap = _read_line_db_map(root)
 
-    # Build known bus set from the Bus sheet logic
+    # Build known (ACTIVE) bus set from the Bus sheet logic
     known_buses = _bus_base_set_from_bus_sheet(input_path)
 
     def _mark_unknown(bus_base: str) -> str:
@@ -270,7 +275,7 @@ def write_line_sheet(xw, input_path: Path) -> None:
         phase = item["phase"]
         from_bus, to_bus = item["from"], item["to"]
 
-        # Rewrite unknown endpoints
+        # Rewrite unknown endpoints based on ACTIVE Bus-sheet presence
         from_bus = _mark_unknown(from_bus)
         to_bus   = _mark_unknown(to_bus)
 

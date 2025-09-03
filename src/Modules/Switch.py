@@ -13,14 +13,19 @@ SUFFIX = {"A": "_a", "B": "_b", "C": "_c"}
 DEVICE_TAGS = ("Switch", "Sectionalizer", "Breaker", "Fuse")
 
 # Miscellaneous devices to TREAT AS series switches
-# Now includes LA (lightning arrester) per request.
+# Includes RB (meter) and LA (lightning arrester).
 MISC_AS_SWITCH_IDS = {"RB", "LA"}  # case-insensitive match on <DeviceID>
+
+# For stripping phase suffixes when needed
+_PHASE_SUFFIX_RE = re.compile(r"_(a|b|c)$")
+
 
 def _phase_tokens(s: str | None) -> List[str]:
     if not s:
         return []
     u = s.upper()
     return [p for p in PHASES if p in u]
+
 
 def _device_id(dev: ET.Element, from_bus_san: str, to_bus_san: str) -> str:
     did = (dev.findtext("DeviceNumber") or "").strip()
@@ -31,6 +36,7 @@ def _device_id(dev: ET.Element, from_bus_san: str, to_bus_san: str) -> str:
         did = safe_name(f"SW_{from_bus_san}_{to_bus_san}")
     return did
 
+
 def _bool_from_text(s: str | None, default: bool | None = None) -> bool | None:
     if s is None:
         return default
@@ -40,6 +46,7 @@ def _bool_from_text(s: str | None, default: bool | None = None) -> bool | None:
     if t in {"0", "false", "no", "n", "disconnected", "open"}:
         return False
     return default
+
 
 def _keep_device(dev: ET.Element, dev_type: str) -> bool:
     """
@@ -66,6 +73,25 @@ def _keep_device(dev: ET.Element, dev_type: str) -> bool:
         return not is_restricted
     return True
 
+
+def _active_bus_bases_from_bus_sheet(input_path: Path) -> set[str]:
+    """
+    Consider a bus active if it appears on the Bus sheet and does NOT start with '//'.
+    Return base names (without trailing _a/_b/_c).
+    """
+    # Lazy import to avoid circular imports
+    from Modules.Bus import extract_bus_data
+
+    bases: set[str] = set()
+    for row in extract_bus_data(input_path):
+        bus = str(row.get("Bus", "")).strip()
+        if not bus or bus.startswith("//"):
+            continue
+        base = _PHASE_SUFFIX_RE.sub("", bus)
+        bases.add(base)
+    return bases
+
+
 def _rows_from_file(txt_path: Path) -> List[Tuple[str, str, str, int]]:
     """
     Returns rows of (From Bus, To Bus, ID, Status).
@@ -75,9 +101,16 @@ def _rows_from_file(txt_path: Path) -> List[Tuple[str, str, str, int]]:
       - Switch/Sectionalizer/Breaker/Fuse (with location filtering)
       - Miscellaneous with DeviceID in MISC_AS_SWITCH_IDS
         (treated as series switches placed between FromNodeID and ToNodeID)
+
+    NOTE: If either endpoint bus base is NOT active on the Bus sheet,
+          the row is commented by prefixing '//' to the **From Bus** cell
+          (leftmost column). The ID remains unprefixed.
     """
     root = ET.fromstring(txt_path.read_text(encoding="utf-8", errors="ignore"))
     rows: List[Tuple[str, str, str, int]] = []
+
+    # Build the set of active bus bases from the Bus sheet
+    active_bases = _active_bus_bases_from_bus_sheet(txt_path)
 
     for sec in root.findall(".//Section"):
         from_bus_raw = (sec.findtext("FromNodeID") or "").strip()
@@ -85,10 +118,14 @@ def _rows_from_file(txt_path: Path) -> List[Tuple[str, str, str, int]]:
         if not from_bus_raw or not to_bus_raw:
             continue
 
-        from_bus = safe_name(from_bus_raw)
-        to_bus   = safe_name(to_bus_raw)
+        from_bus = safe_name(from_bus_raw)  # base (no phase suffix)
+        to_bus   = safe_name(to_bus_raw)    # base (no phase suffix)
 
         sec_phases = _phase_tokens(sec.findtext("Phase"))
+
+        # Should this row be commented?
+        def _comment_row() -> bool:
+            return not ((from_bus in active_bases) and (to_bus in active_bases))
 
         # --- native switch-like devices ---
         for tag in DEVICE_TAGS:
@@ -105,13 +142,15 @@ def _rows_from_file(txt_path: Path) -> List[Tuple[str, str, str, int]]:
                 normal_status = _bool_from_text(dev.findtext("NormalStatus"), default=None)
 
                 for p in phases:
-                    # If ClosedPhase provided, that wins; else NormalStatus (default open if unspecified)
                     is_closed = (p in closed_set) if closed_set else (bool(normal_status) if normal_status is not None else False)
 
                     fb = f"{from_bus}{SUFFIX[p]}"
                     tb = f"{to_bus}{SUFFIX[p]}"
                     rid = f"{base_id}{SUFFIX[p]}"
-                    rows.append((fb, tb, rid, 1 if is_closed else 0))
+
+                    # Put '//' in the **From Bus** cell when commenting
+                    fb_out = f"//{fb}" if _comment_row() else fb
+                    rows.append((fb_out, tb, rid, 1 if is_closed else 0))
 
         # --- Miscellaneous → treat selected DeviceID codes as series switches ---
         for dev in sec.findall(".//Devices/Miscellaneous"):
@@ -130,11 +169,13 @@ def _rows_from_file(txt_path: Path) -> List[Tuple[str, str, str, int]]:
                 fb = f"{from_bus}{SUFFIX[p]}"
                 tb = f"{to_bus}{SUFFIX[p]}"
                 rid = f"{base_id}{SUFFIX[p]}"
-                rows.append((fb, tb, rid, 1 if is_closed else 0))
+                fb_out = f"//{fb}" if _comment_row() else fb
+                rows.append((fb_out, tb, rid, 1 if is_closed else 0))
 
     # De-dup identical rows
     rows = sorted(set(rows), key=lambda r: (r[0], r[1], r[2], r[3]))
     return rows
+
 
 def write_switch_sheet(xw, input_path: Path) -> None:
     """
@@ -143,6 +184,8 @@ def write_switch_sheet(xw, input_path: Path) -> None:
 
     Includes Switch/Sectionalizer/Breaker/Fuse (filtered) and
     Miscellaneous with DeviceID in MISC_AS_SWITCH_IDS as closed series switches.
+
+    Rows that should be disabled are commented by prefixing '//' on the **From Bus** cell.
     """
     wb = xw.book
     ws = wb.add_worksheet("Switch")
@@ -164,4 +207,3 @@ def write_switch_sheet(xw, input_path: Path) -> None:
         ws.write(r, 1, tb)
         ws.write(r, 2, rid)
         ws.write_number(r, 3, status, int0)
-

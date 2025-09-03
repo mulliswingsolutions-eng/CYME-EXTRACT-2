@@ -9,11 +9,33 @@ from Modules.General import safe_name
 PHASE_SUFFIX = {"A": "_a", "B": "_b", "C": "_c"}
 PHASES = ("A", "B", "C")
 
+# for stripping phase suffixes when reading Bus rows if ever needed
+_PHASE_SUFFIX_RE = re.compile(r"_(a|b|c)$")
+
+
+def _active_bus_bases_from_bus_sheet(input_path: Path) -> set[str]:
+    """
+    Consider a bus active if it appears on the Bus sheet and does NOT start with '//'.
+    Return base names (without trailing _a/_b/_c).
+    """
+    # Lazy import to avoid circular dependencies
+    from Modules.Bus import extract_bus_data
+
+    bases: set[str] = set()
+    for row in extract_bus_data(input_path):
+        bus = str(row.get("Bus", "")).strip()
+        if not bus or bus.startswith("//"):
+            continue
+        base = _PHASE_SUFFIX_RE.sub("", bus)
+        bases.add(base)
+    return bases
+
+
 def _cap_id(from_node: str, device_number: str) -> str:
     """
     Goal style prefers 'cap<digits>' (e.g., cap611, cap675).
     We extract digits from the sanitized FromNodeID or DeviceNumber.
-    If none, fall back to a sanitized identifier (no dashes/spaces).
+    If none, fall back to a sanitized identifier.
     """
     fn = safe_name(from_node)
     dn = safe_name(device_number)
@@ -28,9 +50,14 @@ def _parse_shunts(txt_path: Path):
     single_rows: [ID, Status, kVLN, Bus1, P1kW, Q1kVAr]
     two_rows:    [ID, Status1, Status2, kVLN, Bus1, Bus2, P1, Q1, P2, Q2]
     three_rows:  [ID, Status1, Status2, Status3, kVLN, Bus1, Bus2, Bus3, P1, Q1, P2, Q2, P3, Q3]
-    (All IDs and bus names sanitized to [A-Za-z0-9_].)
+
+    NEW: If the shunt's bus base is not active on the Bus sheet,
+         the row is commented by prefixing '//' to the ID.
     """
     root = ET.fromstring(txt_path.read_text(encoding="utf-8", errors="ignore"))
+
+    # Build set of active bus bases from the Bus sheet
+    active_bases = _active_bus_bases_from_bus_sheet(txt_path)
 
     single_rows: List[List[Any]] = []
     two_rows: List[List[Any]] = []
@@ -60,24 +87,30 @@ def _parse_shunts(txt_path: Path):
             except Exception:
                 return 0.0
 
-        kW = {"A": _f(dev.findtext("FixedLossesA")),
-              "B": _f(dev.findtext("FixedLossesB")),
-              "C": _f(dev.findtext("FixedLossesC"))}
+        kW = {
+            "A": _f(dev.findtext("FixedLossesA")),
+            "B": _f(dev.findtext("FixedLossesB")),
+            "C": _f(dev.findtext("FixedLossesC")),
+        }
 
-        kVAr = {"A": _f(dev.findtext("FixedKVARA")),
-                "B": _f(dev.findtext("FixedKVARB")),
-                "C": _f(dev.findtext("FixedKVARC"))}
+        kVAr = {
+            "A": _f(dev.findtext("FixedKVARA")),
+            "B": _f(dev.findtext("FixedKVARB")),
+            "C": _f(dev.findtext("FixedKVARC")),
+        }
 
         # Convention: capacitors inject negative Q in the sheet
         for p in PHASES:
             kVAr[p] = -kVAr[p]
 
+        # Build ID and maybe comment it out if bus is inactive
         cid = _cap_id(from_bus, devnum)
+        cid_out = cid if from_bus in active_bases else f"//{cid}"
 
         if phase in PHASES:
             p = phase
             single_rows.append([
-                cid, status, kvln,
+                cid_out, status, kvln,
                 f"{from_bus}{PHASE_SUFFIX[p]}",
                 kW[p], kVAr[p]
             ])
@@ -85,21 +118,22 @@ def _parse_shunts(txt_path: Path):
         elif phase in ("AB", "BC", "AC"):
             p1, p2 = phase[0], phase[1]
             two_rows.append([
-                cid, status, status, kvln,
+                cid_out, status, status, kvln,
                 f"{from_bus}{PHASE_SUFFIX[p1]}", f"{from_bus}{PHASE_SUFFIX[p2]}",
                 kW[p1], kVAr[p1], kW[p2], kVAr[p2]
             ])
 
         else:  # treat everything else as three-phase (ABC)
             three_rows.append([
-                cid, status, status, status, kvln,
+                cid_out, status, status, status, kvln,
                 f"{from_bus}_a", f"{from_bus}_b", f"{from_bus}_c",
                 kW["A"], kVAr["A"], kW["B"], kVAr["B"], kW["C"], kVAr["C"]
             ])
 
     # stable sort by numeric part of ID so it matches expectation
-    def _key(row):  # row[0] is ID like 'cap675'
-        digits = "".join(ch for ch in (row[0] or "") if ch.isdigit())
+    def _key(row):  # row[0] is ID like 'cap675' (possibly prefixed with '//')
+        id_clean = row[0][2:] if str(row[0]).startswith("//") else str(row[0])
+        digits = "".join(ch for ch in (id_clean or "") if ch.isdigit())
         return int(digits) if digits else 0
 
     single_rows.sort(key=_key)
@@ -112,15 +146,6 @@ def _parse_shunts(txt_path: Path):
 def write_shunt_sheet(xw, input_path: Path) -> None:
     """
     Build the 'Shunt' sheet with the exact layout you specified.
-    - Notes start row 8 (merged A:H)
-    - Blocks start on row 11
-    - Titles merged A:D; 'Go to Type List' in column E (link -> A1)
-    - One blank row between blocks
-    - Top links select table ranges:
-        PositiveSeqShunt  : A:E
-        SinglePhaseShunt  : A:F
-        TwoPhaseShunt     : A:J
-        ThreePhaseShunt   : A:N
     """
     wb = xw.book
     ws = wb.add_worksheet("Shunt")
@@ -140,7 +165,7 @@ def write_shunt_sheet(xw, input_path: Path) -> None:
     for c, w in enumerate(widths):
         ws.set_column(c, c, w)
 
-    # Parse data (already sanitized)
+    # Parse data (already sanitized + protected)
     single_rows, two_rows, three_rows = _parse_shunts(input_path)
 
     # Anchor rows (blocks start at row 11 -> index 10)
@@ -164,7 +189,7 @@ def write_shunt_sheet(xw, input_path: Path) -> None:
     ws.write_url(3, 0, f"internal:'Shunt'!A{b3_h+1}:J{b3_e+1}", link_fmt, "TwoPhaseShunt")
     ws.write_url(4, 0, f"internal:'Shunt'!A{b4_h+1}:N{b4_e+1}", link_fmt, "ThreePhaseShunt")
 
-    # Notes (rows 8–10)
+    # Notes
     ws.merge_range(7, 0, 7, 7, "Important notes:", notes_hdr)
     ws.merge_range(8, 0, 8, 7, "Default order of blocks and columns after row 11 must not change", notes_txt)
     ws.merge_range(9, 0, 9, 7, "One empty row between End of each block and the next block is mandatory; otherwise, empty rows are NOT allowed", notes_txt)

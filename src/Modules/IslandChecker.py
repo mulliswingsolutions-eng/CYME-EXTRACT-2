@@ -4,9 +4,9 @@ from pathlib import Path
 from typing import Dict, List, Set, Tuple
 import xml.etree.ElementTree as ET
 
-from Modules.General import safe_name  # centralized sanitizer (- -> __, etc.)
+from Modules.General import safe_name, set_island_context
 
-# What counts as a topology connection (edges) in a Section's Devices
+# Device groups considered as *topology* edges between FromNodeID <-> ToNodeID
 LINE_LIKE = {
     "OverheadLine", "OverheadLineUnbalanced", "OverheadByPhase",
     "Underground", "UndergroundCable", "UndergroundCableUnbalanced", "UndergroundByPhase",
@@ -22,9 +22,9 @@ def _read_xml(path: Path) -> ET.Element:
 def _dev_is_closed(dev: ET.Element) -> bool:
     """
     Heuristic for 'closed/in-service':
-      - ConnectionStatus == 'Disconnected'      -> OPEN
-      - NormalStatus == 'open'                  -> OPEN
-      - If ClosedPhase is non-empty and not 'None' -> CLOSED
+      - ConnectionStatus == 'Disconnected' -> OPEN
+      - NormalStatus == 'open'            -> OPEN
+      - ClosedPhase present and not 'None' -> CLOSED
       - Otherwise default to CLOSED
     """
     cs = (dev.findtext("ConnectionStatus") or "").strip().lower()
@@ -43,24 +43,20 @@ def _dev_is_closed(dev: ET.Element) -> bool:
 
 
 def _section_has_closed_connection(sec: ET.Element) -> bool:
-    """True if any device in this Section ties From <-> To and is closed."""
     devs = sec.find("./Devices")
     if devs is None:
         return False
 
-    # Transformers are connections unless explicitly open/disconnected
     for tag in TRANSFORMERS:
         for d in devs.findall(tag):
             if _dev_is_closed(d):
                 return True
 
-    # Line-like devices
     for tag in LINE_LIKE:
         for d in devs.findall(tag):
             if _dev_is_closed(d):
                 return True
 
-    # Switch-like devices (meters/misc included) when closed
     for tag in SWITCH_LIKE:
         for d in devs.findall(tag):
             if _dev_is_closed(d):
@@ -80,7 +76,7 @@ def _sources_nodes(root: ET.Element) -> Set[str]:
 
 def _shunt_buses(root: ET.Element) -> Set[str]:
     out: Set[str] = set()
-    for sec in root.findall(".//Section"):
+    for sec in root.findall(".//Sections/Section"):
         devs = sec.find("./Devices")
         if devs is None:
             continue
@@ -97,7 +93,7 @@ def _build_graph(root: ET.Element) -> Tuple[Dict[str, Set[str]], int, int]:
     edges_closed = 0
     edges_open_ignored = 0
 
-    for sec in root.findall(".//Section"):
+    for sec in root.findall(".//Sections/Section"):
         fb = safe_name(sec.findtext("FromNodeID"))
         tb = safe_name(sec.findtext("ToNodeID"))
         if not fb or not tb:
@@ -110,7 +106,7 @@ def _build_graph(root: ET.Element) -> Tuple[Dict[str, Set[str]], int, int]:
         else:
             edges_open_ignored += 1
 
-        # Ensure nodes are present, even if isolated
+        # Ensure standalone nodes exist
         adj.setdefault(fb, adj.get(fb, set()))
         adj.setdefault(tb, adj.get(tb, set()))
 
@@ -159,7 +155,6 @@ def check_islands(xml_path: Path) -> Dict:
     shunt_nodes = _shunt_buses(root)
 
     out_list = []
-    # largest islands first
     for i, comp in enumerate(sorted(comps, key=lambda s: (-len(s), min(s) if s else "")), start=1):
         has_source = any(n in source_nodes for n in comp)
         has_shunt = any(n in shunt_nodes for n in comp)
@@ -183,18 +178,11 @@ def check_islands(xml_path: Path) -> Dict:
 
 
 def log_islands(xml_path: Path, per_island_limit: int | None = None) -> None:
-    """
-    Print a clear, vertical listing of each island's nodes.
-
-    Args:
-        xml_path: Path to the CYME XML.
-        per_island_limit: If set, only print up to this many nodes per island.
-    """
+    """Console-friendly vertical printout."""
     s = check_islands(xml_path)
     print(f"[Islands] Count={s['count']}  Nodes={s['nodes_total']}  "
           f"ClosedEdges={s['edges_closed']}  OpenIgnored={s['edges_open_ignored']}")
     print("-" * 72)
-
     for comp in s["components"]:
         src = "Yes" if comp["has_source"] else "No"
         sh  = "Yes" if comp["has_shunt"]  else "No"
@@ -202,11 +190,71 @@ def log_islands(xml_path: Path, per_island_limit: int | None = None) -> None:
         print("  nodes:")
         nodes = comp["nodes"]
         if per_island_limit is not None and len(nodes) > per_island_limit:
-            to_show = nodes[:per_island_limit]
-            for n in to_show:
+            for n in nodes[:per_island_limit]:
                 print(f"    - {n}")
             print(f"    ... (+{len(nodes) - per_island_limit} more)")
         else:
             for n in nodes:
                 print(f"    - {n}")
-        print("")  # blank line between islands
+        print("")
+
+
+def build_island_context(xml_path: Path) -> dict:
+    """
+    Build a context writers can use:
+      {
+        'bus_to_island': {bus_base: island_idx, ...},
+        'bad_buses': set(bus_base, ...),            # islands WITHOUT source
+        'slack_per_island': {island_idx: bus_base}, # exactly one per island with source
+        'islands': {island_idx: set(bus_base, ...)}
+      }
+    """
+    s = check_islands(xml_path)
+
+    # Map each bus -> island index; collect island sets
+    bus_to_island: Dict[str, int] = {}
+    islands: Dict[int, Set[str]] = {}
+    for comp in s["components"]:
+        idx = comp["index"]
+        bases = set(comp["nodes"])
+        islands[idx] = bases
+        for b in bases:
+            bus_to_island[b] = idx
+
+    # Islands without source
+    bad_islands = {c["index"] for c in s["components"] if not c["has_source"]}
+    bad_buses: Set[str] = set().union(*(islands[i] for i in bad_islands)) if bad_islands else set()
+
+    # Choose one SLACK per island-with-source, prefer the CYME SourceNodeID inside the island
+    root = _read_xml(xml_path)
+    source_nodes = set()
+    for src in root.findall(".//Sources/Source"):
+        nid = safe_name(src.findtext("SourceNodeID"))
+        if nid:
+            source_nodes.add(nid)
+
+    slack_per_island: Dict[int, str] = {}
+    for comp in s["components"]:
+        idx = comp["index"]
+        if idx in bad_islands:
+            continue
+        prefer = sorted(islands[idx] & source_nodes)
+        if prefer:
+            slack_per_island[idx] = prefer[0]
+        else:
+            slack_per_island[idx] = sorted(islands[idx])[0]
+
+    return {
+        "bus_to_island": bus_to_island,
+        "bad_buses": bad_buses,
+        "slack_per_island": slack_per_island,
+        "islands": islands,
+    }
+
+
+def analyze_and_set_island_context(xml_path: Path, *, per_island_limit: int | None = None) -> dict:
+    """Print vertical summary and store context globally for writers."""
+    log_islands(xml_path, per_island_limit=per_island_limit)
+    ctx = build_island_context(xml_path)
+    set_island_context(ctx)
+    return ctx

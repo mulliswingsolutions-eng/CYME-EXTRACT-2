@@ -8,10 +8,13 @@ import xml.etree.ElementTree as ET
 from collections import deque
 from typing import Dict, List, Tuple, Any, Set
 from Modules.General import safe_name
+from Modules.Bus import extract_bus_data   # <-- NEW: to get active Bus bases
 
 PHASES = ("A", "B", "C")
 PHASE_SUFFIX = {"A": "_a", "B": "_b", "C": "_c"}
 EPS = 1e-6  # numerical zero
+
+_PHASE_SUFFIX_RE = re.compile(r"_(a|b|c)$")
 
 def _read_xml(path: Path) -> ET.Element:
     return ET.fromstring(path.read_text(encoding="utf-8", errors="ignore"))
@@ -58,7 +61,7 @@ def _build_voltage_map(txt_path: Path) -> Dict[str, float]:
     'pure network' branches (lines/cables/switches) that do not host loads/shunts.
     All node IDs are sanitized so they match sheet outputs.
     """
-    root = _read_xml(txt_path)
+    root = _read_xml(Path(txt_path))
     kvll_default = _get_source_kvll(root)
     tdb = _read_transformer_db(root)
 
@@ -434,6 +437,17 @@ def write_load_sheet(xw, input_path: Path) -> None:
     # Voltage map (built on sanitized node names)
     bus_kvll = _build_voltage_map(input_path)
 
+    # ---------- NEW: Determine ACTIVE bus bases from Bus sheet ----------
+    bus_rows = extract_bus_data(input_path)
+    active_bases: Set[str] = set()
+    for row in bus_rows:
+        bus_field = str(row.get("Bus", "")).strip()
+        if not bus_field or bus_field.startswith("//"):
+            continue  # ignore commented Bus rows
+        base = _PHASE_SUFFIX_RE.sub("", bus_field)  # strip _a/_b/_c
+        if base:
+            active_bases.add(base)
+
     # Anchors
     r = 10
     b1_t, b1_h, b1_e = r, r + 1, r + 2; r = b1_e + 2
@@ -489,7 +503,12 @@ def write_load_sheet(xw, input_path: Path) -> None:
         bus = row["Bus"]
         vkv = bus_kvll.get(bus, bus_kvll["_default_"])
         conn = (row["Conn"] or "").lower()
-        ws.write(rcur, 0, row["ID"])
+
+        # NEW: comment out this row if its bus base is NOT active on Bus sheet
+        is_active_bus = (bus in active_bases)
+        id_out = row["ID"] if is_active_bus else f"//{row['ID']}"
+
+        ws.write(rcur, 0, id_out)
         ws.write_number(rcur, 1, row["Status"], num0)
         ws.write_number(rcur, 2, vkv, num2)
         ws.write_number(rcur, 3, 0.2, num2)
@@ -520,7 +539,11 @@ def write_load_sheet(xw, input_path: Path) -> None:
         vkv = bus_kvll.get(bus, bus_kvll["_default_"])
         p1, p2 = row["PhasePair"]
         conn = (row["Conn"] or "").lower()
-        ws.write(rcur, 0, row["ID"]); ws.write_number(rcur, 1, row["Status"], num0)
+
+        is_active_bus = (bus in active_bases)
+        id_out = row["ID"] if is_active_bus else f"//{row['ID']}"
+
+        ws.write(rcur, 0, id_out); ws.write_number(rcur, 1, row["Status"], num0)
         ws.write_number(rcur, 2, vkv, num2)
         ws.write_number(rcur, 3, 0.2, num2)
         ws.write(rcur, 4, "wye" if conn.startswith("y") else "delta" if conn.startswith("d") else "")
@@ -548,7 +571,11 @@ def write_load_sheet(xw, input_path: Path) -> None:
         bus = row["Bus"]
         vkv = bus_kvll.get(bus, bus_kvll["_default_"])
         conn = (row["Conn"] or "").lower()
-        ws.write(rcur, 0, row["ID"]); ws.write_number(rcur, 1, row["Status"], num0)
+
+        is_active_bus = (bus in active_bases)
+        id_out = row["ID"] if is_active_bus else f"//{row['ID']}"
+
+        ws.write(rcur, 0, id_out); ws.write_number(rcur, 1, row["Status"], num0)
         ws.write_number(rcur, 2, vkv, num2)
         ws.write_number(rcur, 3, 0.2, num2)
         ws.write(rcur, 4, "wye" if conn.startswith("y") else "delta" if conn.startswith("d") else "")

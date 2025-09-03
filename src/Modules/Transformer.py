@@ -111,6 +111,29 @@ def _bounds_from_ntaps(ntaps: Optional[float]) -> tuple[Optional[int], Optional[
 
 
 # ------------------------
+# Active bus discovery (from Bus sheet)
+# ------------------------
+_PHASE_SUFFIX_RE = re.compile(r"_(a|b|c)$")
+
+def _active_bus_bases_from_bus_sheet(input_path: Path) -> set[str]:
+    """
+    Consider a bus active if it appears on the Bus sheet and does NOT start with '//'.
+    Return base names (without trailing _a/_b/_c).
+    """
+    # Lazy import to avoid circular imports
+    from Modules.Bus import extract_bus_data
+
+    bases: set[str] = set()
+    for row in extract_bus_data(input_path):
+        bus = str(row.get("Bus", "")).strip()
+        if not bus or bus.startswith("//"):
+            continue
+        base = _PHASE_SUFFIX_RE.sub("", bus)
+        bases.add(base)
+    return bases
+
+
+# ------------------------
 # Read TransformerDB
 # ------------------------
 def _read_transformer_db(root: ET.Element) -> Dict[str, Dict[str, Any]]:
@@ -185,9 +208,15 @@ def _parse_multiphase_2w_rows(input_path: Path) -> List[List[Any]]:
     """
     Parse <Section><Devices><Transformer> entries and build Multiphase 2W rows.
     No defaults are injected; missing data → empty cells.
+
+    NEW: If either endpoint bus is NOT active on the Bus sheet, we prefix the
+         transformer ID with '//' so the row is commented out (avoids dangling devices).
     """
     root = ET.fromstring(input_path.read_text(encoding="utf-8", errors="ignore"))
     tdb = _read_transformer_db(root)
+
+    # Active bus bases from Bus sheet
+    active_bases = _active_bus_bases_from_bus_sheet(input_path)
 
     rows: List[List[Any]] = []
 
@@ -246,8 +275,13 @@ def _parse_multiphase_2w_rows(input_path: Path) -> List[List[Any]]:
         # sanitized row ID
         rid = safe_name(f"TR1_{from_bus}_{to_bus}")
 
+        # Comment out if either endpoint bus base is not active on Bus sheet
+        from_active = from_bus in active_bases
+        to_active   = to_bus in active_bases
+        rid_out = rid if (from_active and to_active) else f"//{rid}"
+
         rows.append([
-            rid, status, _phase_count(phase),
+            rid_out, status, _phase_count(phase),
             b1a, b1b, b1c, kvp, kva, conn_p,
             b2a, b2b, b2c, kvs, kva, conn_s,
             taps["tap1"], taps["tap2"], taps["tap3"],
@@ -346,9 +380,9 @@ def write_transformer_sheet(xw, input_path: Path) -> None:
             else:
                 ws.write_number(rr, c, v, fmt)
 
-        ws.write(rr, 0, row[0])                 # ID
-        wnum(1, row[1], f0)                     # Status
-        wnum(2, row[2], f0)                     # Number of phases
+        ws.write(rr, 0, row[0])                 # ID (may be prefixed with //)
+        wnum(1, row[1],  f0)                    # Status
+        wnum(2, row[2],  f0)                    # Number of phases
 
         ws.write(rr, 3, row[3]); ws.write(rr, 4, row[4]); ws.write(rr, 5, row[5])
         wnum(6,  row[6],  f2)                   # Vp
@@ -381,11 +415,11 @@ def write_transformer_sheet(xw, input_path: Path) -> None:
     ws.write_url(b4_t, 3, go_top, link_fmt, "Go to Type List")
     ws.write_row(
         b4_h, 0,
-        ["ID","Status","Number of phases",
-         "Bus1","Bus2","Bus3","V (kV)","S_base (kVA)","Conn. type",
-         "Bus1","Bus2","Bus3","V (kV)","S_base (kVA)","Conn. type",
-         "Tap 1","Tap 2","Tap 3","Lowest Tap","Highest Tap","Min Range (%)","Max Range (%)",
-         "Z0 leakage (pu)","Z1 leakage (pu)","X0/R0","X1/R1","No Load Loss (kW)"],
+            ["ID","Status","Number of phases",
+            "Bus1","Bus2","Bus3","V (kV)","S_base (kVA)","Conn. type",
+            "Bus1","Bus2","Bus3","V (kV)","S_base (kVA)","Conn. type",
+            "Tap 1","Tap 2","Tap 3","Lowest Tap","Highest Tap","Min Range (%)","Max Range (%)",
+            "Z0 leakage (pu)","Z1 leakage (pu)","X0/R0","X1/R1","No Load Loss (kW)"],
         th
     )
     ws.merge_range(b4_e, 0, b4_e, 3, "End of Multiphase 2W-Transformer with Mutual Impedance")

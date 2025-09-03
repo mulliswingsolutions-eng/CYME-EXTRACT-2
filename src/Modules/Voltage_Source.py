@@ -4,11 +4,34 @@ from pathlib import Path
 import xml.etree.ElementTree as ET
 from typing import List, Dict, Any, Optional
 import re
+
 from Modules.General import safe_name
+
+# --- helpers to see which buses are actually active on the Bus sheet ---
+_PHASE_SUFFIX_RE = re.compile(r"_(a|b|c)$")
+
+def _active_bus_bases_from_bus_sheet(input_path: Path) -> set[str]:
+    """
+    Use the Bus page logic to know which buses are actually present & active.
+    We consider a bus active if the Bus row does NOT start with '//' (i.e., not commented).
+    Returns a set of base names (without the trailing _a/_b/_c).
+    """
+    # Lazy import to avoid any import-time cycles
+    from Modules.Bus import extract_bus_data
+
+    bases: set[str] = set()
+    for row in extract_bus_data(input_path):
+        bus = str(row.get("Bus", "")).strip()
+        if not bus or bus.startswith("//"):
+            continue
+        base = _PHASE_SUFFIX_RE.sub("", bus)  # strip trailing _a/_b/_c
+        bases.add(base)
+    return bases
+
 
 def _make_src_id(raw: str) -> str:
     """
-    Sanitize and ensure single 'SRC_' prefix.
+    Sanitize and ensure single 'SRC_' prefix. (Uses General.safe_name so '-' -> '__'.)
     """
     name = safe_name(raw)
     if not name:
@@ -114,9 +137,15 @@ def _parse_voltage_sources(path: Path) -> tuple[list[dict], list[dict]]:
       - sc_rows  -> Short-Circuit Level Data rows
       - seq_rows -> Sequential Data rows
     Only includes sources from Topo blocks where NetworkType == 'Substation'.
+
+    NEW:
+    - If the source bus base is NOT active on the Bus sheet, we prefix the ID with '//'
+      so the row is commented out (keeps file consistent and avoids dangling sources).
     """
     txt = path.read_text(encoding="utf-8", errors="ignore")
     root = ET.fromstring(txt)
+
+    active_bus_bases = _active_bus_bases_from_bus_sheet(path)
 
     sc_rows: List[Dict[str, Any]] = []
     seq_rows: List[Dict[str, Any]] = []
@@ -126,6 +155,7 @@ def _parse_voltage_sources(path: Path) -> tuple[list[dict], list[dict]]:
         if not node_raw:
             continue
         node = safe_name(node_raw)  # sanitize bus base name
+        node_active = node in active_bus_bases
 
         models = src.findall("./EquivalentSourceModels/EquivalentSourceModel")
         if not models:
@@ -151,12 +181,14 @@ def _parse_voltage_sources(path: Path) -> tuple[list[dict], list[dict]]:
                 angle_a = 0.0
 
             sid = _get_source_id(src, node, model_index=idx if len(models) > 1 else None)
+            # Comment this source row out if its bus isn't active
+            id_out = sid if node_active else f"//{sid}"
 
             seq = _pick_seq_impedances(eq, src)
             if seq:
                 seq_rows.append(
                     {
-                        "ID": sid,
+                        "ID": id_out,
                         "Bus1": f"{node}_a",
                         "Bus2": f"{node}_b",
                         "Bus3": f"{node}_c",
@@ -175,7 +207,7 @@ def _parse_voltage_sources(path: Path) -> tuple[list[dict], list[dict]]:
 
                 sc_rows.append(
                     {
-                        "ID": sid,
+                        "ID": id_out,
                         "Bus1": f"{node}_a",
                         "Bus2": f"{node}_b",
                         "Bus3": f"{node}_c",
