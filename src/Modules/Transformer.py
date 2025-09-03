@@ -5,6 +5,7 @@ import re
 import xml.etree.ElementTree as ET
 from typing import Dict, List, Tuple, Any, Optional
 from Modules.General import safe_name
+from Modules.IslandFilter import should_comment_branch
 
 # ------------------------
 # Small helpers
@@ -275,10 +276,12 @@ def _parse_multiphase_2w_rows(input_path: Path) -> List[List[Any]]:
         # sanitized row ID
         rid = safe_name(f"TR1_{from_bus}_{to_bus}")
 
-        # Comment out if either endpoint bus base is not active on Bus sheet
+        # Comment out if either endpoint is inactive on Bus sheet OR island policy excludes this branch
         from_active = from_bus in active_bases
         to_active   = to_bus in active_bases
-        rid_out = rid if (from_active and to_active) else f"//{rid}"
+        island_exclude = should_comment_branch(from_bus, to_bus)
+        comment = (not from_active) or (not to_active) or island_exclude
+        rid_out = f"//{rid}" if comment else rid
 
         rows.append([
             rid_out, status, _phase_count(phase),

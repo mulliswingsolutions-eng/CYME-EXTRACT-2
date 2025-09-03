@@ -4,7 +4,7 @@ from pathlib import Path
 import xml.etree.ElementTree as ET
 from typing import List, Dict, Any, Optional
 import re
-
+from Modules.IslandFilter import should_comment_branch
 from Modules.General import safe_name
 
 # --- helpers to see which buses are actually active on the Bus sheet ---
@@ -181,8 +181,11 @@ def _parse_voltage_sources(path: Path) -> tuple[list[dict], list[dict]]:
                 angle_a = 0.0
 
             sid = _get_source_id(src, node, model_index=idx if len(models) > 1 else None)
-            # Comment this source row out if its bus isn't active
-            id_out = sid if node_active else f"//{sid}"
+            # Comment out if the bus isn't active on the Bus sheet OR the island policy excludes this node
+            island_exclude = should_comment_branch(node, node)  # reuse island filter for node-local devices
+            comment = (not node_active) or island_exclude
+            id_out = f"//{sid}" if comment else sid
+
 
             seq = _pick_seq_impedances(eq, src)
             if seq:

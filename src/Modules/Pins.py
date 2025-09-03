@@ -1,26 +1,14 @@
 # Modules/Pins.py
 from __future__ import annotations
 from pathlib import Path
-import re
 import xml.etree.ElementTree as ET
 from typing import Dict, List, Set, Tuple
 
-from Modules.General import safe_name              # centralized sanitizer (- -> __, etc.)
-from Modules.Bus import extract_bus_data           # to see which Bus rows are active
+from Modules.General import safe_name
+from Modules.IslandFilter import should_comment_bus, should_comment_branch
 
 PHASES = ("A", "B", "C")
 SUFFIX = {"A": "_a", "B": "_b", "C": "_c"}
-
-_PHASE_SUFFIX_RE = re.compile(r"_(a|b|c)$")
-
-def _base_bus_name(bus_or_bus_phase: str) -> str:
-    """
-    Strip optional '//' comment and trailing phase suffix to obtain the base bus name.
-    """
-    s = (bus_or_bus_phase or "").strip()
-    if s.startswith("//"):
-        s = s[2:]
-    return _PHASE_SUFFIX_RE.sub("", s)
 
 
 # ---------- Parsing helpers (all derived from the file) ----------
@@ -179,22 +167,11 @@ def write_pins_sheet(xw, input_path: Path) -> None:
 
     Protections:
       - All bus/ID strings are sanitized via safe_name (so '-' -> '__', etc.).
-      - Pins only reference **active** buses/lines that will actually exist on the Bus sheet
-        (bus rows not commented out and with both endpoints known).
+      - **Island policy** drives inclusion:
+          * If an active island is chosen → include only that island.
+          * If none chosen → include only islands with a voltage source.
     """
     root = ET.fromstring(input_path.read_text(encoding="utf-8", errors="ignore"))
-
-    # ---------- determine which buses are ACTIVE on the Bus sheet ----------
-    # Only include Bus rows that are NOT commented out ('//').
-    bus_rows = extract_bus_data(input_path)
-    active_bases: Set[str] = set()
-    for row in bus_rows:
-        bus_field = str(row.get("Bus", "")).strip()
-        if not bus_field or bus_field.startswith("//"):
-            continue  # skip commented buses
-        base = _base_bus_name(bus_field)  # strip phase suffix
-        if base:
-            active_bases.add(base)
 
     # Discovery (all sanitized by helpers above)
     bus_ph = _bus_phases(root)                  # bus -> phases present
@@ -203,12 +180,15 @@ def write_pins_sheet(xw, input_path: Path) -> None:
     load_phase_counts = _loads_by_bus(root)     # bus -> number of load phases
     xf_pairs = _transformer_pairs(root)         # (from,to,nph)
 
-    # Filter to ACTIVE Bus-sheet bases only
-    v_buses = {b for b in v_buses if b in active_bases}
-    bus_ph = {b: phs for b, phs in bus_ph.items() if b in active_bases}
-    lines = [(fb, tb, nph) for (fb, tb, nph) in lines if fb in active_bases and tb in active_bases]
-    load_phase_counts = {b: n for b, n in load_phase_counts.items() if b in active_bases}
-    xf_pairs = [(fb, tb, nph) for (fb, tb, nph) in xf_pairs if fb in active_bases and tb in active_bases]
+    # ---------- Filter by island policy ----------
+    # Buses
+    v_buses = {b for b in v_buses if not should_comment_bus(b)}
+    bus_ph = {b: phs for b, phs in bus_ph.items() if not should_comment_bus(b)}
+    load_phase_counts = {b: n for b, n in load_phase_counts.items() if not should_comment_bus(b)}
+
+    # Branch-like objects (lines / transformer pairs)
+    lines = [(fb, tb, nph) for (fb, tb, nph) in lines if not should_comment_branch(fb, tb)]
+    xf_pairs = [(fb, tb, nph) for (fb, tb, nph) in xf_pairs if not should_comment_branch(fb, tb)]
 
     # Writer setup
     wb = xw.book

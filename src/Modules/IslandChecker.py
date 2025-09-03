@@ -204,9 +204,10 @@ def build_island_context(xml_path: Path) -> dict:
     Build a context writers can use:
       {
         'bus_to_island': {bus_base: island_idx, ...},
-        'bad_buses': set(bus_base, ...),            # islands WITHOUT source
-        'slack_per_island': {island_idx: bus_base}, # exactly one per island with source
-        'islands': {island_idx: set(bus_base, ...)}
+        'bad_buses': set(bus_base, ...),            # reserved for truly bad pseudo terminals (left empty by default)
+        'slack_per_island': {island_idx: bus_base}, # exactly one per island WITH a source
+        'islands': {island_idx: set(bus_base, ...)},
+        'sourceful_islands': set([island_idx, ...]) # convenience for UI/filters
       }
     """
     s = check_islands(xml_path)
@@ -214,18 +215,16 @@ def build_island_context(xml_path: Path) -> dict:
     # Map each bus -> island index; collect island sets
     bus_to_island: Dict[str, int] = {}
     islands: Dict[int, Set[str]] = {}
+    has_source_by_island: Dict[int, bool] = {}
     for comp in s["components"]:
         idx = comp["index"]
         bases = set(comp["nodes"])
         islands[idx] = bases
         for b in bases:
             bus_to_island[b] = idx
+        has_source_by_island[idx] = bool(comp["has_source"])
 
-    # Islands without source
-    bad_islands = {c["index"] for c in s["components"] if not c["has_source"]}
-    bad_buses: Set[str] = set().union(*(islands[i] for i in bad_islands)) if bad_islands else set()
-
-    # Choose one SLACK per island-with-source, prefer the CYME SourceNodeID inside the island
+    # Source nodes (prefer slack there)
     root = _read_xml(xml_path)
     source_nodes = set()
     for src in root.findall(".//Sources/Source"):
@@ -234,21 +233,25 @@ def build_island_context(xml_path: Path) -> dict:
             source_nodes.add(nid)
 
     slack_per_island: Dict[int, str] = {}
-    for comp in s["components"]:
-        idx = comp["index"]
-        if idx in bad_islands:
-            continue
-        prefer = sorted(islands[idx] & source_nodes)
-        if prefer:
-            slack_per_island[idx] = prefer[0]
-        else:
-            slack_per_island[idx] = sorted(islands[idx])[0]
+    for idx, bases in islands.items():
+        if not has_source_by_island.get(idx, False):
+            continue  # only assign slack if the island really has a source
+        prefer = sorted(bases & source_nodes)
+        slack_per_island[idx] = prefer[0] if prefer else sorted(bases)[0]
+
+    # IMPORTANT CHANGE:
+    # Do NOT pre-mark all buses in no-source islands as "bad".
+    # Leave this set for intrinsic pseudo/terminal nodes only (empty by default).
+    bad_buses: Set[str] = set()
+
+    sourceful_islands = {i for i, ok in has_source_by_island.items() if ok}
 
     return {
         "bus_to_island": bus_to_island,
         "bad_buses": bad_buses,
         "slack_per_island": slack_per_island,
         "islands": islands,
+        "sourceful_islands": sourceful_islands,
     }
 
 

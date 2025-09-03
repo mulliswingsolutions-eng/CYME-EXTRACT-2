@@ -6,6 +6,7 @@ import xml.etree.ElementTree as ET
 from typing import Dict, List, Optional, Tuple
 import re
 from Modules.Bus import extract_bus_data  # reuse Bus page logic (and comment filtering)
+from Modules.IslandFilter import should_comment_branch
 from Modules.General import safe_name
 
 
@@ -273,15 +274,22 @@ def write_line_sheet(xw, input_path: Path) -> None:
 
     for item in _iter_lines(root):
         phase = item["phase"]
-        from_bus, to_bus = item["from"], item["to"]
 
-        # Rewrite unknown endpoints based on ACTIVE Bus-sheet presence
-        from_bus = _mark_unknown(from_bus)
-        to_bus   = _mark_unknown(to_bus)
+        # base names (already sanitized by _iter_lines)
+        from_base = item["from"]
+        to_base   = item["to"]
 
-        # If either endpoint is unknown, prefix '//' to ID to comment it out
+        # island filter decision **before** we add _unknown
+        comment_for_island = should_comment_branch(from_base, to_base)
+
+        # now append _unknown for endpoints that don’t exist on the Bus sheet
+        from_bus = _mark_unknown(from_base)
+        to_bus   = _mark_unknown(to_base)
+
         unknown = from_bus.endswith("_unknown") or to_bus.endswith("_unknown")
-        id_out = ("//" if unknown else "") + item["id"]
+
+        # final ID (comment if either island filter says so OR endpoint unknown)
+        id_out = ("//" if (comment_for_island or unknown) else "") + item["id"]
 
         length_mi = (item["length_m"] or 0.0) * MI_PER_M
         status = 1

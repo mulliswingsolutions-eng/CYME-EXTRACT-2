@@ -8,7 +8,7 @@ import xml.etree.ElementTree as ET
 from collections import deque
 from typing import Dict, List, Tuple, Any, Set
 from Modules.General import safe_name
-from Modules.Bus import extract_bus_data   # <-- NEW: to get active Bus bases
+from Modules.IslandFilter import should_comment_branch, should_comment_bus
 
 PHASES = ("A", "B", "C")
 PHASE_SUFFIX = {"A": "_a", "B": "_b", "C": "_c"}
@@ -437,17 +437,6 @@ def write_load_sheet(xw, input_path: Path) -> None:
     # Voltage map (built on sanitized node names)
     bus_kvll = _build_voltage_map(input_path)
 
-    # ---------- NEW: Determine ACTIVE bus bases from Bus sheet ----------
-    bus_rows = extract_bus_data(input_path)
-    active_bases: Set[str] = set()
-    for row in bus_rows:
-        bus_field = str(row.get("Bus", "")).strip()
-        if not bus_field or bus_field.startswith("//"):
-            continue  # ignore commented Bus rows
-        base = _PHASE_SUFFIX_RE.sub("", bus_field)  # strip _a/_b/_c
-        if base:
-            active_bases.add(base)
-
     # Anchors
     r = 10
     b1_t, b1_h, b1_e = r, r + 1, r + 2; r = b1_e + 2
@@ -504,9 +493,7 @@ def write_load_sheet(xw, input_path: Path) -> None:
         vkv = bus_kvll.get(bus, bus_kvll["_default_"])
         conn = (row["Conn"] or "").lower()
 
-        # NEW: comment out this row if its bus base is NOT active on Bus sheet
-        is_active_bus = (bus in active_bases)
-        id_out = row["ID"] if is_active_bus else f"//{row['ID']}"
+        id_out = row["ID"] if not should_comment_bus(bus) else f"//{row['ID']}"
 
         ws.write(rcur, 0, id_out)
         ws.write_number(rcur, 1, row["Status"], num0)
@@ -540,8 +527,7 @@ def write_load_sheet(xw, input_path: Path) -> None:
         p1, p2 = row["PhasePair"]
         conn = (row["Conn"] or "").lower()
 
-        is_active_bus = (bus in active_bases)
-        id_out = row["ID"] if is_active_bus else f"//{row['ID']}"
+        id_out = row["ID"] if not should_comment_bus(bus) else f"//{row['ID']}"
 
         ws.write(rcur, 0, id_out); ws.write_number(rcur, 1, row["Status"], num0)
         ws.write_number(rcur, 2, vkv, num2)
@@ -572,8 +558,7 @@ def write_load_sheet(xw, input_path: Path) -> None:
         vkv = bus_kvll.get(bus, bus_kvll["_default_"])
         conn = (row["Conn"] or "").lower()
 
-        is_active_bus = (bus in active_bases)
-        id_out = row["ID"] if is_active_bus else f"//{row['ID']}"
+        id_out = row["ID"] if not should_comment_bus(bus) else f"//{row['ID']}"
 
         ws.write(rcur, 0, id_out); ws.write_number(rcur, 1, row["Status"], num0)
         ws.write_number(rcur, 2, vkv, num2)

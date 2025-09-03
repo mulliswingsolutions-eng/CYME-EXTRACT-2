@@ -3,33 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 import xml.etree.ElementTree as ET
 from typing import List, Dict, Any
-import re
 from Modules.General import safe_name
+from Modules.IslandFilter import should_comment_bus
 
 PHASE_SUFFIX = {"A": "_a", "B": "_b", "C": "_c"}
 PHASES = ("A", "B", "C")
-
-# for stripping phase suffixes when reading Bus rows if ever needed
-_PHASE_SUFFIX_RE = re.compile(r"_(a|b|c)$")
-
-
-def _active_bus_bases_from_bus_sheet(input_path: Path) -> set[str]:
-    """
-    Consider a bus active if it appears on the Bus sheet and does NOT start with '//'.
-    Return base names (without trailing _a/_b/_c).
-    """
-    # Lazy import to avoid circular dependencies
-    from Modules.Bus import extract_bus_data
-
-    bases: set[str] = set()
-    for row in extract_bus_data(input_path):
-        bus = str(row.get("Bus", "")).strip()
-        if not bus or bus.startswith("//"):
-            continue
-        base = _PHASE_SUFFIX_RE.sub("", bus)
-        bases.add(base)
-    return bases
-
 
 def _cap_id(from_node: str, device_number: str) -> str:
     """
@@ -55,9 +33,6 @@ def _parse_shunts(txt_path: Path):
          the row is commented by prefixing '//' to the ID.
     """
     root = ET.fromstring(txt_path.read_text(encoding="utf-8", errors="ignore"))
-
-    # Build set of active bus bases from the Bus sheet
-    active_bases = _active_bus_bases_from_bus_sheet(txt_path)
 
     single_rows: List[List[Any]] = []
     two_rows: List[List[Any]] = []
@@ -103,9 +78,9 @@ def _parse_shunts(txt_path: Path):
         for p in PHASES:
             kVAr[p] = -kVAr[p]
 
-        # Build ID and maybe comment it out if bus is inactive
+        # Build ID and maybe comment it out per island policy
         cid = _cap_id(from_bus, devnum)
-        cid_out = cid if from_bus in active_bases else f"//{cid}"
+        cid_out = cid if not should_comment_bus(from_bus) else f"//{cid}"
 
         if phase in PHASES:
             p = phase

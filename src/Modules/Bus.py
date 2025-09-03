@@ -4,7 +4,8 @@ from pathlib import Path
 from typing import Dict, List, Set, Tuple
 import xml.etree.ElementTree as ET
 
-from Modules.General import safe_name, get_island_context
+from Modules.General import safe_name
+from Modules.IslandFilter import should_comment_bus   # <-- use island policy here
 
 PHASES = ("A", "B", "C")
 
@@ -92,6 +93,9 @@ def _parse_bus_rows(input_path: Path) -> List[Dict]:
       - Unused buses are commented even if they are SLACK.
       - All buses reachable from a VS-page source *without crossing a transformer* get LN = KVLL/√3
         for that source; others default to 7.2 kV LN.
+      - Island policy:
+          * If an Active Island is chosen → keep only that island (even if it has no source).
+          * If none chosen → keep only islands with a voltage source.
     """
     root = _read_xml(Path(input_path))
 
@@ -237,9 +241,6 @@ def _parse_bus_rows(input_path: Path) -> List[Dict]:
         # Fallback: conservative (may create buses with no active usage)
         _add(f, ph)
 
-    # NOTE: Do NOT auto-add any source nodes; only buses that appear via sections are considered.
-    # This ensures floating/unused sources don't force-create a bus row.
-
     # -------- PASS 3: compute ACTIVE usage
     known_bases: Set[str] = set(node_phases.keys())
     active_degree: Dict[str, int] = {}
@@ -298,30 +299,25 @@ def _parse_bus_rows(input_path: Path) -> List[Dict]:
         if src in known_bases and src not in hv_ln_assign:
             hv_ln_assign[src] = ln_volts
 
-    # -------- Island context (if present)
-    ctx = get_island_context() or {}
-    bad_buses: Set[str] = set(ctx.get("bad_buses", set()))
-    bus_to_island: Dict[str, int] = dict(ctx.get("bus_to_island", {}))
-    # We do not use island-proposed slack; only Voltage Source page sources can be SLACK.
-
-    # -------- Emit rows (comment out unused OR no-source-island buses; SLACK only for VS-page sources)
+    # -------- Emit rows (comment out unused OR island-filtered buses; SLACK only for VS-page sources)
     def pkey(p: str) -> int:
         return PHASES.index(p)
 
     rows: List[Dict] = []
     for node in sorted(node_phases):
-        is_in_bad_island = node in bad_buses
         is_active = active_degree.get(node, 0) > 0
 
         # Only sources that appear on the Voltage Source page are SLACK
         bus_type = "SLACK" if node in vs_slack_nodes else "PQ"
 
+        # Island policy decides if this node should be commented (unless it's unused, which also comments)
+        island_comment = should_comment_bus(node)
+
         for ph in sorted(node_phases[node], key=pkey):
             bus_name = f"{node}_{ph.lower()}"
 
-            # Comment if unused or in a bad island (even if SLACK)
-            should_comment = is_in_bad_island or (not is_active)
-            if should_comment:
+            # Comment if unused or excluded by island policy
+            if (not is_active) or island_comment:
                 bus_name = "//" + bus_name
 
             # Per-row voltages:

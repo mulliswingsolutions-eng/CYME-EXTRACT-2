@@ -5,6 +5,7 @@ import re
 import xml.etree.ElementTree as ET
 from typing import List, Tuple
 from Modules.General import safe_name
+from Modules.IslandFilter import should_comment_branch
 
 PHASES = ("A", "B", "C")
 SUFFIX = {"A": "_a", "B": "_b", "C": "_c"}
@@ -74,24 +75,6 @@ def _keep_device(dev: ET.Element, dev_type: str) -> bool:
     return True
 
 
-def _active_bus_bases_from_bus_sheet(input_path: Path) -> set[str]:
-    """
-    Consider a bus active if it appears on the Bus sheet and does NOT start with '//'.
-    Return base names (without trailing _a/_b/_c).
-    """
-    # Lazy import to avoid circular imports
-    from Modules.Bus import extract_bus_data
-
-    bases: set[str] = set()
-    for row in extract_bus_data(input_path):
-        bus = str(row.get("Bus", "")).strip()
-        if not bus or bus.startswith("//"):
-            continue
-        base = _PHASE_SUFFIX_RE.sub("", bus)
-        bases.add(base)
-    return bases
-
-
 def _rows_from_file(txt_path: Path) -> List[Tuple[str, str, str, int]]:
     """
     Returns rows of (From Bus, To Bus, ID, Status).
@@ -109,9 +92,6 @@ def _rows_from_file(txt_path: Path) -> List[Tuple[str, str, str, int]]:
     root = ET.fromstring(txt_path.read_text(encoding="utf-8", errors="ignore"))
     rows: List[Tuple[str, str, str, int]] = []
 
-    # Build the set of active bus bases from the Bus sheet
-    active_bases = _active_bus_bases_from_bus_sheet(txt_path)
-
     for sec in root.findall(".//Section"):
         from_bus_raw = (sec.findtext("FromNodeID") or "").strip()
         to_bus_raw   = (sec.findtext("ToNodeID") or "").strip()
@@ -125,7 +105,9 @@ def _rows_from_file(txt_path: Path) -> List[Tuple[str, str, str, int]]:
 
         # Should this row be commented?
         def _comment_row() -> bool:
-            return not ((from_bus in active_bases) and (to_bus in active_bases))
+            # Comment out the row if this branch (from_base -> to_base) is NOT allowed
+            # under the current island-selection policy.
+            return should_comment_branch(from_bus, to_bus)
 
         # --- native switch-like devices ---
         for tag in DEVICE_TAGS:
