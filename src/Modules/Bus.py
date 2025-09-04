@@ -242,12 +242,14 @@ def _parse_bus_rows(input_path: Path) -> List[Dict]:
         "Underground", "UndergroundCable", "UndergroundCableUnbalanced", "UndergroundByPhase",
         "Transformer",
         "Switch", "Fuse", "Recloser", "Breaker", "Sectionalizer", "Isolator",
+        "Miscellaneous",  # NEW: allow endpoints/degree counting across meter/LA, etc.
     ]
     # Edges for voltage propagation: **exclude transformers**
     BRANCH_NO_XFMR_TAGS = [
         "OverheadLine", "OverheadLineUnbalanced", "OverheadByPhase",
         "Underground", "UndergroundCable", "UndergroundCableUnbalanced", "UndergroundByPhase",
         "Switch", "Fuse", "Recloser", "Breaker", "Sectionalizer", "Isolator",
+        "Miscellaneous",  # NEW: treat as a conducting link (no voltage change)
     ]
 
     branch_endpoints: Set[str] = set()
@@ -258,6 +260,7 @@ def _parse_bus_rows(input_path: Path) -> List[Dict]:
     to_count_nonlocal: Dict[str, int] = {}
     local_pseudo_to_candidates: Set[str] = set()
 
+    raw_degree: Dict[str, int] = {}   # <-- ADD THIS LINE
     xf_endpoints: Set[str] = set()
 
     # adjacency for BFS (non-transformer branches only)

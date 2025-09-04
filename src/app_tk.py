@@ -16,10 +16,11 @@ BASE_DIR = Path(__file__).resolve().parent
 def resource_path(*parts: str) -> Path:
     """
     Return a Path to packaged resources that works in dev and PyInstaller.
-    Example: resource_path('icons', 'convert.ico')
+    Example: resource_path('icons', 'nature.ico')
     """
     if getattr(sys, "frozen", False):
-        base = Path(cast(str, getattr(sys, "_MEIPASS", str(BASE_DIR.parent))))  # no direct sys._MEIPASS access
+        # Pylance-safe access to _MEIPASS without tripping attribute checks
+        base = Path(cast(str, getattr(sys, "_MEIPASS", str(BASE_DIR.parent))))
         return base.joinpath(*parts)
     return BASE_DIR.parent.joinpath(*parts)
 
@@ -166,13 +167,13 @@ def open_in_file_explorer(path: Path) -> None:
 def set_window_icon(window: tk.Tk | ctk.CTk) -> tk.PhotoImage | None:
     """
     Window/taskbar icon:
-      - Windows: prefer convert.ico (iconbitmap)
-      - Else: use convert.png if present (iconphoto)
+      - Windows: prefer nature.ico (iconbitmap)
+      - Else: use nature.png if present (iconphoto)
     Works with PyInstaller via resource_path().
     """
     try:
-        ico = resource_path("icons", "convert.ico")
-        png = resource_path("icons", "convert.png")
+        ico = resource_path("icons", "nature.ico")
+        png = resource_path("icons", "nature.png")
 
         if platform.system() == "Windows" and ico.exists():
             window.iconbitmap(default=str(ico))
@@ -181,7 +182,7 @@ def set_window_icon(window: tk.Tk | ctk.CTk) -> tk.PhotoImage | None:
         if png.exists():
             img = tk.PhotoImage(file=str(png))
             window.iconphoto(True, img)
-            return img
+            return img  # caller must keep a reference
     except Exception:
         pass
     return None
@@ -221,7 +222,6 @@ class App(ctk.CTk):
     def __init__(self):
         super().__init__()
         self._icon_ref = set_window_icon(self)  # keep ref
-        set_window_icon(self)
         self.title(APP_NAME)
         self.geometry("1180x720")
 
@@ -266,7 +266,7 @@ class App(ctk.CTk):
         elif logo_ico.exists():
             # PhotoImage cannot load .ico; try Pillow if available, else skip header image.
             try:
-                from PIL import Image, ImageTk  # requires pillow
+                from PIL import Image, ImageTk  # type: ignore[reportMissingImports]
                 im = Image.open(str(logo_ico)).resize((52, 52))
                 img_obj = ImageTk.PhotoImage(im)
             except Exception:
