@@ -4,11 +4,146 @@ from pathlib import Path
 from typing import Dict, List, Set, Tuple
 import xml.etree.ElementTree as ET
 
-from Modules.General import safe_name
-from Modules.IslandFilter import should_comment_bus   # <-- use island policy here
-
+# replace with
+from Modules.General import safe_name, get_island_context
+# (optional robust fallback for standalone use)
+try:
+    from Modules.General import get_island_context  # already imported above; keeps Pylance happy
+except Exception:
+    def get_island_context() -> dict:
+        return {}
+    
 PHASES = ("A", "B", "C")
 
+# Add just once in Bus.py
+def _fnum(x: str | None) -> float | None:
+    try:
+        if x is None:
+            return None
+        s = x.strip()
+        if not s:
+            return None
+        if s.lower().endswith("deg"):  # tolerate "330deg"
+            s = s[:-3]
+        return float(s)
+    except Exception:
+        return None
+
+
+def _collect_transformers_with_kvll(root: ET.Element) -> list[tuple[str, str, float | None, float | None]]:
+    """
+    Returns list of (from_bus, to_bus, KVLL_primary_volts, KVLL_secondary_volts).
+    Uses TransformerDB when available; falls back to section fields if present.
+    """
+    # Map EquipmentID/DeviceID -> (kvp_ll, kvs_ll) in volts (LL)
+    db: dict[str, tuple[float | None, float | None]] = {}
+    for tdb in root.findall(".//TransformerDB"):
+        eid = safe_name(tdb.findtext("EquipmentID"))
+        kvp = _fnum(tdb.findtext("PrimaryVoltage")) or _fnum(tdb.findtext("PrimaryKV"))
+        kvs = _fnum(tdb.findtext("SecondaryVoltage")) or _fnum(tdb.findtext("SecondaryKV"))
+        if kvp is not None:
+            kvp *= 1000.0
+        if kvs is not None:
+            kvs *= 1000.0
+        if eid:
+            db[eid] = (kvp, kvs)
+
+    pairs: list[tuple[str, str, float | None, float | None]] = []
+    for sec in root.findall(".//Sections/Section"):
+        xf = sec.find(".//Devices/Transformer")
+        if xf is None:
+            continue
+        fb = safe_name(sec.findtext("./FromNodeID"))
+        tb = safe_name(sec.findtext("./ToNodeID"))
+        if not fb or not tb:
+            continue
+
+        dev_id = safe_name(xf.findtext("DeviceID"))
+        kvp_ll = kvs_ll = None
+
+        # Prefer DB by DeviceID/EquipmentID
+        if dev_id and dev_id in db:
+            kvp_ll, kvs_ll = db[dev_id]
+
+        # Fallbacks from the section if DB was missing or 0
+        if kvp_ll is None:
+            kvp_ll = _fnum(xf.findtext("SystemBaseVoltage/Primary")) or _fnum(xf.findtext("PrimaryKV"))
+            if kvp_ll is not None:
+                kvp_ll *= 1000.0
+        if kvs_ll is None:
+            kvs_ll = _fnum(xf.findtext("SystemBaseVoltage/Secondary")) or _fnum(xf.findtext("SecondaryKV"))
+            if kvs_ll is not None:
+                kvs_ll *= 1000.0
+
+        pairs.append((fb, tb, kvp_ll, kvs_ll))
+    return pairs
+
+
+def _propagate_ln_via_transformers(
+    hv_ln_assign: dict[str, float],
+    adj_no_xfmr: dict[str, set[str]],
+    xf_pairs: list[tuple[str, str, float | None, float | None]],
+) -> None:
+    """
+    Fill in LN volts on the far side of transformers, then flood across the
+    non-transformer graph. Repeat until no changes (handles cascaded XFRs).
+    """
+    import math
+    def close(a: float, b: float, rel: float = 0.06) -> bool:
+        m = max(abs(a), abs(b), 1.0)
+        return abs(a - b) / m <= rel
+
+    def flood(start_node: str, ln_val: float) -> None:
+        # Push the assigned LN across NO-TRANSFORMER edges
+        stack = [start_node]
+        while stack:
+            u = stack.pop()
+            for v in adj_no_xfmr.get(u, ()):
+                if v not in hv_ln_assign:
+                    hv_ln_assign[v] = ln_val
+                    stack.append(v)
+
+    changed = True
+    while changed:
+        changed = False
+        for fb, tb, kvp_ll, kvs_ll in xf_pairs:
+            lf = hv_ln_assign.get(fb)
+            lt = hv_ln_assign.get(tb)
+            # Need at least one side assigned and both KVLLs to decide orientation
+            if (lf is None and lt is None) or (kvp_ll is None or kvs_ll is None):
+                continue
+
+            kvp_ln = kvp_ll / math.sqrt(3.0) if kvp_ll is not None else None
+            kvs_ln = kvs_ll / math.sqrt(3.0) if kvs_ll is not None else None
+            if kvp_ln is None or kvs_ln is None:
+                continue
+
+            # If From side looks like primary, set To as secondary (and propagate)
+            if lf is not None and lt is None and (close(lf, kvp_ln) or not close(lf, kvs_ln)):
+                hv_ln_assign[tb] = kvs_ln
+                flood(tb, kvs_ln)
+                changed = True
+                continue
+
+            # If From side looks like secondary, set To as primary
+            if lf is not None and lt is None and close(lf, kvs_ln):
+                hv_ln_assign[tb] = kvp_ln
+                flood(tb, kvp_ln)
+                changed = True
+                continue
+
+            # Mirror: To side known, From side unknown
+            if lt is not None and lf is None and (close(lt, kvp_ln) or not close(lt, kvs_ln)):
+                hv_ln_assign[fb] = kvs_ln
+                flood(fb, kvs_ln)
+                changed = True
+                continue
+
+            if lt is not None and lf is None and close(lt, kvs_ln):
+                hv_ln_assign[fb] = kvp_ln
+                flood(fb, kvp_ln)
+                changed = True
+                continue
 
 def _read_xml(path: Path) -> ET.Element:
     return ET.fromstring(path.read_text(encoding="utf-8", errors="ignore"))
@@ -46,15 +181,16 @@ def _local_pseudos(sec: ET.Element) -> Set[str]:
                 pseudos.add(di)
     return pseudos
 
-
-def _gather_vs_page_sources_and_kvll(root: ET.Element) -> Tuple[Set[str], Dict[str, float]]:
+def _gather_vs_page_sources_and_kvll(root: ET.Element) -> tuple[set[str], dict[str, float]]:
     """
-    Return (nodes, kvll_volts) for the sources that WILL SHOW on the Voltage Source page.
-    Logic: Topo where NetworkType == 'Substation' and EquivalentMode != '1';
-           source must have an EquivalentSource block.
+    Return ({source_nodes}, {node -> KVLL_volts}) for sources that WILL SHOW
+    on the Voltage Source page:
+      - Topo where NetworkType == 'Substation'
+      - EquivalentMode != '1'
+      - Source must have an EquivalentSource block
     """
-    nodes: Set[str] = set()
-    kvll_map: Dict[str, float] = {}
+    nodes: set[str] = set()
+    kvll_map: dict[str, float] = {}
     for topo in root.findall(".//Topo"):
         ntype = (topo.findtext("NetworkType") or "").strip().lower()
         eq_mode = (topo.findtext("EquivalentMode") or "").strip()
@@ -77,7 +213,6 @@ def _gather_vs_page_sources_and_kvll(root: ET.Element) -> Tuple[Set[str], Dict[s
                     pass
     return nodes, kvll_map
 
-
 def _parse_bus_rows(input_path: Path) -> List[Dict]:
     """
     Build rows for the Bus sheet.
@@ -87,54 +222,45 @@ def _parse_bus_rows(input_path: Path) -> List[Dict]:
 
     Rules:
       - Buses with no ACTIVE connections are prefixed with '//' (commented out).
-        ACTIVE = branch with both endpoints that will exist on the Bus sheet.
       - Only sources that appear on the Voltage Source page (Topo Substation & not EquivalentMode=1)
-        are SLACK. Feeder-start pseudo-sources that don't appear on that page remain PQ.
-      - Unused buses are commented even if they are SLACK.
-      - All buses reachable from a VS-page source *without crossing a transformer* get LN = KVLL/√3
-        for that source; others default to 7.2 kV LN.
-      - Island policy:
-          * If an Active Island is chosen → keep only that island (even if it has no source).
-          * If none chosen → keep only islands with a voltage source.
+        are marked SLACK.
+      - Islands without sources are commented via bad_buses in the island context.
+      - Base LN voltage is propagated from each VS-page source through the network
+        WITHOUT crossing transformers; i.e., KV only changes at a transformer.
     """
     root = _read_xml(Path(input_path))
 
-    # --- Only consider sources that appear on the Voltage Source page ---
-    vs_slack_nodes, kvll_map = _gather_vs_page_sources_and_kvll(root)
-
-    # Standard phase angles for display
+    # angles for A/B/C (display only)
     phase_ang = {"A": 0.0, "B": -120.0, "C": 120.0}
 
-    # -------- PASS 1: scan all sections to determine endpoints/usage and detect local pseudos
+    # -------- source set & kVLL (from Voltage Source page only)
+    vs_slack_nodes, kvll_map = _gather_vs_page_sources_and_kvll(root)
+
+    # -------- PASS 1: scan sections (same pseudo filtering you had)
     BRANCH_TAGS = [
-        # Overhead / Underground lines (all flavors)
         "OverheadLine", "OverheadLineUnbalanced", "OverheadByPhase",
         "Underground", "UndergroundCable", "UndergroundCableUnbalanced", "UndergroundByPhase",
-        # Transformers
         "Transformer",
-        # Switching / protection devices (treat like branches)
         "Switch", "Fuse", "Recloser", "Breaker", "Sectionalizer", "Isolator",
     ]
-    # For adjacency used to propagate HV from source to transformer, exclude transformers:
+    # Edges for voltage propagation: **exclude transformers**
     BRANCH_NO_XFMR_TAGS = [
         "OverheadLine", "OverheadLineUnbalanced", "OverheadByPhase",
         "Underground", "UndergroundCable", "UndergroundCableUnbalanced", "UndergroundByPhase",
         "Switch", "Fuse", "Recloser", "Breaker", "Sectionalizer", "Isolator",
     ]
 
-    branch_endpoints: Set[str] = set()           # all From/To seen in branch sections (sanitized)
-    all_from_nodes: Set[str] = set()             # all FromNodeID across sections (sanitized)
-    device_terminal_candidates: Set[str] = set() # ToNodeID of SpotLoad/Shunt sections (sanitized)
+    branch_endpoints: Set[str] = set()
+    all_from_nodes: Set[str] = set()
+    device_terminal_candidates: Set[str] = set()
 
-    # For branch-local pseudo detection:
     from_count: Dict[str, int] = {}
-    to_count_nonlocal: Dict[str, int] = {}       # times a node is To in a section where it's NOT local pseudo
-    local_pseudo_to_candidates: Set[str] = set() # ToNodeIDs equal to local SectionID/DeviceNumber/DeviceID (sanitized)
+    to_count_nonlocal: Dict[str, int] = {}
+    local_pseudo_to_candidates: Set[str] = set()
 
-    # We still gather a "raw" degree during scan, but final "active" usage is computed later.
-    raw_degree: Dict[str, int] = {}
+    xf_endpoints: Set[str] = set()
 
-    # Also build an adjacency (no-transformer edges) for HV propagation
+    # adjacency for BFS (non-transformer branches only)
     adj: Dict[str, Set[str]] = {}
 
     def _add_edge(a: str, b: str) -> None:
@@ -148,6 +274,12 @@ def _parse_bus_rows(input_path: Path) -> List[Dict]:
         t_raw = (sec.findtext("./ToNodeID") or "").strip()
         f = safe_name(f_raw)
         t = safe_name(t_raw)
+
+        if sec.find(".//Devices/Transformer") is not None:
+            if f:
+                xf_endpoints.add(f)
+            if t:
+                xf_endpoints.add(t)
 
         if f:
             all_from_nodes.add(f)
@@ -168,40 +300,38 @@ def _parse_bus_rows(input_path: Path) -> List[Dict]:
             if t:
                 branch_endpoints.add(t)
                 raw_degree[t] = raw_degree.get(t, 0) + 1
-            # local pseudo test for the To side of this branch
             if t:
-                lp = _local_pseudos(sec)  # already sanitized inside
+                lp = _local_pseudos(sec)
                 if t in lp:
                     local_pseudo_to_candidates.add(t)
                 else:
                     to_count_nonlocal[t] = to_count_nonlocal.get(t, 0) + 1
 
         if has_spot or has_shunt:
-            # treat the network side (FromNodeID) as a usage (bump raw_degree)
             if f:
                 raw_degree[f] = raw_degree.get(f, 0) + 1
-            # ToNodeID on device sections often refers to a local pseudo terminal — don't bump degree on t
             if t:
                 device_terminal_candidates.add(t)
 
-        # Build adjacency only for *non-transformer* branches
+        # Build **non-transformer** adjacency
         if has_branch_no_xfmr and f and t:
             _add_edge(f, t)
 
-    # Refined exclusions
     terminal_exclusions_1: Set[str] = {
         n for n in device_terminal_candidates if n not in branch_endpoints and n not in all_from_nodes
     }
     terminal_exclusions_2: Set[str] = {
         n for n in local_pseudo_to_candidates if from_count.get(n, 0) == 0 and to_count_nonlocal.get(n, 0) == 0
     }
-    terminal_exclusions: Set[str] = terminal_exclusions_1 | terminal_exclusions_2
+    terminal_exclusions: Set[str] = (terminal_exclusions_1 | terminal_exclusions_2) - xf_endpoints
 
-    # -------- PASS 2: build node -> phases map with refined exclusions
+    # -------- PASS 2: node -> phases map (with exclusions)
     def _is_real_bus(nid: str | None) -> bool:
         nid = safe_name(nid)
         if not nid:
             return False
+        if nid in xf_endpoints:  # always keep transformer ends
+            return True
         if nid in terminal_exclusions:
             return False
         return True
@@ -228,23 +358,20 @@ def _parse_bus_rows(input_path: Path) -> List[Dict]:
         )
 
         if has_spot or has_shunt:
-            # Device sections: include only the network side (FromNodeID)
             _add(f, ph)
             continue
 
         if has_branch:
-            # Branch sections: include both ends (unless excluded by refined rules)
             _add(f, ph)
             _add(t, ph)
             continue
 
-        # Fallback: conservative (may create buses with no active usage)
         _add(f, ph)
 
-    # -------- PASS 3: compute ACTIVE usage
     known_bases: Set[str] = set(node_phases.keys())
-    active_degree: Dict[str, int] = {}
 
+    # -------- PASS 3: ACTIVE usage (for commenting rules)
+    active_degree: Dict[str, int] = {}
     for sec in root.findall(".//Sections/Section"):
         f = safe_name(sec.findtext("./FromNodeID"))
         t = safe_name(sec.findtext("./ToNodeID"))
@@ -257,79 +384,85 @@ def _parse_bus_rows(input_path: Path) -> List[Dict]:
         )
 
         if has_branch:
-            # Only count as ACTIVE if BOTH endpoints will exist on Bus sheet
             if f and t and (f in known_bases) and (t in known_bases):
                 active_degree[f] = active_degree.get(f, 0) + 1
                 active_degree[t] = active_degree.get(t, 0) + 1
 
         if has_spot or has_shunt:
-            # Count the network side only if that bus will exist
             if f and (f in known_bases):
                 active_degree[f] = active_degree.get(f, 0) + 1
 
-    # -------- Build HV propagation from VS-page sources up to transformer (no-XFMR graph)
-    # Map: node -> ln_volts assigned from a particular source's KVLL/√3
+    # -------- LN voltage assignment by BFS from VS-page sources (no transformers)
     hv_ln_assign: Dict[str, float] = {}
-
     from collections import deque
 
     for src in vs_slack_nodes:
-        if src not in kvll_map:
+        kvll_v = kvll_map.get(src)
+        if kvll_v is None:
             continue
-        ln_volts = kvll_map[src] / (3 ** 0.5)
-        # BFS from this source over the no-transformer adjacency
+        ln_v = kvll_v / (3 ** 0.5)
         q = deque()
         visited: Set[str] = set()
         if src in adj:
             q.append(src)
             visited.add(src)
         else:
-            # Even if no neighbors, still tag the source itself if present.
             visited.add(src)
         while q:
             u = q.popleft()
-            # Assign if bus exists on the Bus sheet
             if u in known_bases and u not in hv_ln_assign:
-                hv_ln_assign[u] = ln_volts
+                hv_ln_assign[u] = ln_v
             for v in adj.get(u, ()):
                 if v not in visited:
                     visited.add(v)
                     q.append(v)
-        # Also tag the source itself even if it didn’t appear in adj
+        # tag the source itself even if isolated
         if src in known_bases and src not in hv_ln_assign:
-            hv_ln_assign[src] = ln_volts
+            hv_ln_assign[src] = ln_v
+            
+    xf_pairs = _collect_transformers_with_kvll(root)
+    _propagate_ln_via_transformers(hv_ln_assign, adj, xf_pairs)
 
-    # -------- Emit rows (comment out unused OR island-filtered buses; SLACK only for VS-page sources)
+    # -------- Island context
+    ctx = get_island_context() or {}
+    bad_buses: Set[str] = set(ctx.get("bad_buses", set()))
+    bus_to_island: Dict[str, int] = dict(ctx.get("bus_to_island", {}))
+    slack_per_island: Dict[int, str] = dict(ctx.get("slack_per_island", {}))
+
+    # -------- Emit rows
     def pkey(p: str) -> int:
         return PHASES.index(p)
 
     rows: List[Dict] = []
     for node in sorted(node_phases):
+        island = bus_to_island.get(node)
+        is_in_bad_island = node in bad_buses
         is_active = active_degree.get(node, 0) > 0
 
-        # Only sources that appear on the Voltage Source page are SLACK
-        bus_type = "SLACK" if node in vs_slack_nodes else "PQ"
+        # SLACK only if this node is an actual VS-page source (or island slack selected in context)
+        if node in vs_slack_nodes:
+            bus_type = "SLACK"
+        elif island is not None and slack_per_island.get(island) == node and not is_in_bad_island:
+            bus_type = "SLACK"
+        else:
+            bus_type = "PQ"
 
-        # Island policy decides if this node should be commented (unless it's unused, which also comments)
-        island_comment = should_comment_bus(node)
+        # per-node base LN volts: use BFS assignment; if not assigned, default (e.g., 7.2 kV LN)
+        node_ln_v = hv_ln_assign.get(node, 7200.0)
 
         for ph in sorted(node_phases[node], key=pkey):
             bus_name = f"{node}_{ph.lower()}"
 
-            # Comment if unused or excluded by island policy
-            if (not is_active) or island_comment:
+            # comment unused or bad-island buses
+            should_comment = is_in_bad_island or (bus_type != "SLACK" and not is_active)
+            if should_comment:
                 bus_name = "//" + bus_name
-
-            # Per-row voltages:
-            # - If node is reachable from a VS-page source without crossing a transformer, use that source's LN
-            # - Else default to 7.2 kV LN
-            v_ln = hv_ln_assign.get(node, 7200.0)
 
             rows.append(
                 {
                     "Bus": bus_name,
-                    "Base Voltage (V)": v_ln,   # per-phase base
-                    "Initial Vmag": v_ln,       # equal to base (per phase)
+                    "Base Voltage (V)": node_ln_v,   # per-phase base LN volts
+                    "Initial Vmag": node_ln_v,       # equal to base for initialization
                     "Unit": "V",
                     "Angle": phase_ang.get(ph, 0.0),
                     "Type": bus_type,

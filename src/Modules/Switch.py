@@ -20,6 +20,19 @@ MISC_AS_SWITCH_IDS = {"RB", "LA"}  # case-insensitive match on <DeviceID>
 # For stripping phase suffixes when needed
 _PHASE_SUFFIX_RE = re.compile(r"_(a|b|c)$")
 
+# --- Active buses from the Bus sheet (bases without _a/_b/_c), excluding commented rows ---
+def _active_bus_bases_from_bus_sheet(input_path: Path) -> set[str]:
+    # Lazy import to avoid import cycles
+    from Modules.Bus import extract_bus_data
+    bases: set[str] = set()
+    for row in extract_bus_data(input_path):
+        bus = str(row.get("Bus", "")).strip()
+        if not bus or bus.startswith("//"):
+            continue
+        base = _PHASE_SUFFIX_RE.sub("", bus)  # strip trailing _a/_b/_c
+        if base:
+            bases.add(base)
+    return bases
 
 def _phase_tokens(s: str | None) -> List[str]:
     if not s:
@@ -85,12 +98,29 @@ def _rows_from_file(txt_path: Path) -> List[Tuple[str, str, str, int]]:
       - Miscellaneous with DeviceID in MISC_AS_SWITCH_IDS
         (treated as series switches placed between FromNodeID and ToNodeID)
 
-    NOTE: If either endpoint bus base is NOT active on the Bus sheet,
-          the row is commented by prefixing '//' to the **From Bus** cell
-          (leftmost column). The ID remains unprefixed.
+    Row commenting rule (applies to every emitted phase-row):
+      - If island policy says the branch should be commented (should_comment_branch),
+        OR either endpoint bus base is NOT active on the Bus sheet (row absent or commented),
+        then prefix '//' to the **From Bus** cell in that row.
+      - The ID is never prefixed.
     """
     root = ET.fromstring(txt_path.read_text(encoding="utf-8", errors="ignore"))
     rows: List[Tuple[str, str, str, int]] = []
+
+    # Active bus bases from Bus sheet (exclude commented rows). Use lazy import to avoid cycles.
+    try:
+        from Modules.Bus import extract_bus_data
+        active_bases: set[str] = set()
+        for row in extract_bus_data(txt_path):
+            bus = str(row.get("Bus", "")).strip()
+            if not bus or bus.startswith("//"):
+                continue
+            base = _PHASE_SUFFIX_RE.sub("", bus)  # strip trailing _a/_b/_c
+            if base:
+                active_bases.add(base)
+    except Exception:
+        # If Bus data can't be read, fall back to empty set so we don't enable dubious rows
+        active_bases = set()
 
     for sec in root.findall(".//Section"):
         from_bus_raw = (sec.findtext("FromNodeID") or "").strip()
@@ -101,13 +131,18 @@ def _rows_from_file(txt_path: Path) -> List[Tuple[str, str, str, int]]:
         from_bus = safe_name(from_bus_raw)  # base (no phase suffix)
         to_bus   = safe_name(to_bus_raw)    # base (no phase suffix)
 
+        # Phases declared on the section; if none, we’ll derive from per-device fields or default ABC
         sec_phases = _phase_tokens(sec.findtext("Phase"))
 
-        # Should this row be commented?
+        # Should a row (for any phase) be commented?
         def _comment_row() -> bool:
-            # Comment out the row if this branch (from_base -> to_base) is NOT allowed
-            # under the current island-selection policy.
-            return should_comment_branch(from_bus, to_bus)
+            # (1) Island policy
+            if should_comment_branch(from_bus, to_bus):
+                return True
+            # (2) Endpoints must exist and be active on the Bus sheet
+            if (from_bus not in active_bases) or (to_bus not in active_bases):
+                return True
+            return False
 
         # --- native switch-like devices ---
         for tag in DEVICE_TAGS:
@@ -118,7 +153,7 @@ def _rows_from_file(txt_path: Path) -> List[Tuple[str, str, str, int]]:
                 base_id = _device_id(dev, from_bus, to_bus)
 
                 closed_phase_text = (dev.findtext("ClosedPhase") or "").strip()
-                closed_set = set(_phase_tokens(closed_phase_text))  # "None" -> empty set
+                closed_set = set(_phase_tokens(closed_phase_text))  # "None" or "" -> empty set
 
                 phases = sec_phases if sec_phases else (list(closed_set) if closed_set else list(PHASES))
                 normal_status = _bool_from_text(dev.findtext("NormalStatus"), default=None)
@@ -130,7 +165,7 @@ def _rows_from_file(txt_path: Path) -> List[Tuple[str, str, str, int]]:
                     tb = f"{to_bus}{SUFFIX[p]}"
                     rid = f"{base_id}{SUFFIX[p]}"
 
-                    # Put '//' in the **From Bus** cell when commenting
+                    # Comment by prefixing the **From Bus** cell
                     fb_out = f"//{fb}" if _comment_row() else fb
                     rows.append((fb_out, tb, rid, 1 if is_closed else 0))
 
@@ -140,7 +175,7 @@ def _rows_from_file(txt_path: Path) -> List[Tuple[str, str, str, int]]:
             if dev_code not in MISC_AS_SWITCH_IDS:
                 continue
 
-            # Consider connected==closed; default to closed for these inline devices
+            # Consider connected==closed; default to closed for inline devices
             conn = _bool_from_text(dev.findtext("ConnectionStatus"), default=True)
             is_closed = True if conn is None else bool(conn)
 
@@ -154,10 +189,9 @@ def _rows_from_file(txt_path: Path) -> List[Tuple[str, str, str, int]]:
                 fb_out = f"//{fb}" if _comment_row() else fb
                 rows.append((fb_out, tb, rid, 1 if is_closed else 0))
 
-    # De-dup identical rows
+    # De-dup identical rows and keep a stable order
     rows = sorted(set(rows), key=lambda r: (r[0], r[1], r[2], r[3]))
     return rows
-
 
 def write_switch_sheet(xw, input_path: Path) -> None:
     """

@@ -4,6 +4,7 @@ import os, sys, json, threading, queue, traceback, platform, subprocess
 from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
+from typing import Any, Callable, TYPE_CHECKING, cast
 
 import customtkinter as ctk
 import pandas as pd
@@ -15,11 +16,11 @@ BASE_DIR = Path(__file__).resolve().parent
 def resource_path(*parts: str) -> Path:
     """
     Return a Path to packaged resources that works in dev and PyInstaller.
-    Example: resource_path('icons', 'nature.ico')
+    Example: resource_path('icons', 'convert.ico')
     """
-    if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
-        return Path(sys._MEIPASS, *parts)
-    # running from source: project root is .../src/ -> parent is repo root
+    if getattr(sys, "frozen", False):
+        base = Path(cast(str, getattr(sys, "_MEIPASS", str(BASE_DIR.parent))))  # no direct sys._MEIPASS access
+        return base.joinpath(*parts)
     return BASE_DIR.parent.joinpath(*parts)
 
 if str(BASE_DIR) not in sys.path:
@@ -162,28 +163,28 @@ def open_in_file_explorer(path: Path) -> None:
     else:
         subprocess.call(["xdg-open", p])
 
-def set_window_icon(window: tk.Tk | ctk.CTk) -> None:
+def set_window_icon(window: tk.Tk | ctk.CTk) -> tk.PhotoImage | None:
     """
     Window/taskbar icon:
-      - Windows: prefer nature.ico (iconbitmap)
-      - Else: use nature.png if present (iconphoto)
+      - Windows: prefer convert.ico (iconbitmap)
+      - Else: use convert.png if present (iconphoto)
     Works with PyInstaller via resource_path().
     """
     try:
-        ico = resource_path("icons", "nature.ico")
-        png = resource_path("icons", "nature.png")
+        ico = resource_path("icons", "convert.ico")
+        png = resource_path("icons", "convert.png")
 
         if platform.system() == "Windows" and ico.exists():
             window.iconbitmap(default=str(ico))
-            return
+            return None
 
         if png.exists():
             img = tk.PhotoImage(file=str(png))
             window.iconphoto(True, img)
-            window._icon_img_ref = img  # keep reference to avoid GC
-            return
+            return img
     except Exception:
         pass
+    return None
 
 def setup_appearance() -> tuple[str, str, int, int, dict]:
     """CustomTkinter global theme + fonts + colors."""
@@ -219,6 +220,7 @@ def setup_appearance() -> tuple[str, str, int, int, dict]:
 class App(ctk.CTk):
     def __init__(self):
         super().__init__()
+        self._icon_ref = set_window_icon(self)  # keep ref
         set_window_icon(self)
         self.title(APP_NAME)
         self.geometry("1180x720")
