@@ -35,5 +35,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['icons\\nature.ico'],
+    icon=['icons\\cyme_logo.ico'],
 )

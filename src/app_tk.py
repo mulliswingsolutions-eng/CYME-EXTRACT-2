@@ -150,8 +150,15 @@ def load_conf() -> dict:
         return {}
 
 def save_conf(data: dict) -> None:
+    """Merge and persist small UI settings (best-effort, safe)."""
     try:
-        CONF_PATH.write_text(json.dumps(data, indent=2))
+        current = {}
+        try:
+            current = json.loads(CONF_PATH.read_text())
+        except Exception:
+            current = {}
+        current.update(data)
+        CONF_PATH.write_text(json.dumps(current, indent=2))
     except Exception:
         pass
 
@@ -172,8 +179,11 @@ def set_window_icon(window: tk.Tk | ctk.CTk) -> tk.PhotoImage | None:
     Works with PyInstaller via resource_path().
     """
     try:
-        ico = resource_path("icons", "nature.ico")
-        png = resource_path("icons", "nature.png")
+        # Prefer new branded assets
+        ico = resource_path("icons", "cyme_logo.ico")
+        png = resource_path("icons", "cyme_logo_light.png")
+        old_ico = resource_path("icons", "nature.ico")
+        old_png = resource_path("icons", "nature.png")
 
         if platform.system() == "Windows" and ico.exists():
             window.iconbitmap(default=str(ico))
@@ -183,15 +193,156 @@ def set_window_icon(window: tk.Tk | ctk.CTk) -> tk.PhotoImage | None:
             img = tk.PhotoImage(file=str(png))
             window.iconphoto(True, img)
             return img  # caller must keep a reference
+
+        # Fallback to legacy files if new ones are missing
+        if platform.system() == "Windows" and old_ico.exists():
+            window.iconbitmap(default=str(old_ico))
+            return None
+        if old_png.exists():
+            img = tk.PhotoImage(file=str(old_png))
+            window.iconphoto(True, img)
+            return img
     except Exception:
         pass
     return None
 
-def setup_appearance() -> tuple[str, str, int, int, dict]:
-    """CustomTkinter global theme + fonts + colors."""
-    ctk.set_appearance_mode("light")
-    ctk.set_default_color_theme("blue")  # we override accents below
+def _hex(c: str) -> tuple[int, int, int]:
+    c = c.lstrip('#')
+    return int(c[0:2], 16), int(c[2:4], 16), int(c[4:6], 16)
 
+def ensure_brand_assets() -> None:
+    """Generate light/dark PNG logos and ICO if missing.
+    Creates:
+      - icons/cyme_logo_light.png
+      - icons/cyme_logo_dark.png
+      - icons/cyme_logo.ico
+    The design: pastel ring, inner disc, clean bolt, drawn at high res and downsampled.
+    """
+    try:
+        from PIL import Image, ImageDraw, ImageFilter  # type: ignore
+    except Exception:
+        return
+
+    icons_dir = resource_path("icons")
+    icons_dir.mkdir(parents=True, exist_ok=True)
+
+    out_light = icons_dir / "cyme_logo_light.png"
+    out_dark = icons_dir / "cyme_logo_dark.png"
+    out_ico = icons_dir / "cyme_logo.ico"
+
+    def make_variant(mode: str, path: Path) -> Image.Image:
+        W = 1024
+        img = Image.new("RGBA", (W, W), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(img)
+
+        if mode == "dark":
+            bg = _hex("#0F172A")
+            ring = _hex("#C3B5FD")
+            bolt = _hex("#FFFFFF")
+            glow = (167, 139, 250, 90)
+        else:
+            bg = _hex("#FFFFFF")
+            ring = _hex("#A78BFA")
+            bolt = _hex("#6D28D9")
+            glow = (167, 139, 250, 70)
+
+        cx = cy = W // 2
+        R = int(W * 0.42)
+        ring_w = int(W * 0.08)
+
+        # Drop shadow
+        shadow = Image.new("RGBA", (W, W), (0, 0, 0, 0))
+        sd = ImageDraw.Draw(shadow)
+        sd.ellipse((cx - R, cy - R, cx + R, cy + R), fill=(0, 0, 0, 160))
+        shadow = shadow.filter(ImageFilter.GaussianBlur(radius=int(W * 0.03)))
+        img.alpha_composite(shadow)
+
+        # Outer ring and subtle highlight
+        draw.ellipse((cx - R, cy - R, cx + R, cy + R), outline=ring + (255,), width=ring_w)
+        inset = int(ring_w * 0.35)
+        draw.ellipse((cx - R + inset, cy - R + inset, cx + R - inset, cy + R - inset),
+                     outline=(255, 255, 255, 60), width=max(1, int(ring_w * 0.25)))
+
+        # Inner disc
+        r2 = R - int(ring_w * 0.75)
+        draw.ellipse((cx - r2, cy - r2, cx + r2, cy + r2), fill=bg + (255,))
+
+        # Soft radial glow
+        glow_im = Image.new("RGBA", (W, W), (0, 0, 0, 0))
+        gd = ImageDraw.Draw(glow_im)
+        gd.ellipse((cx - int(r2 * 0.95), cy - int(r2 * 0.95), cx + int(r2 * 0.95), cy + int(r2 * 0.95)), fill=glow)
+        glow_im = glow_im.filter(ImageFilter.GaussianBlur(radius=int(W * 0.05)))
+        img.alpha_composite(glow_im)
+
+        # --- File conversion + power systems hint ---
+        # Document sheet
+        doc_w, doc_h = int(r2 * 1.05), int(r2 * 1.05)
+        dx0, dy0 = cx - int(doc_w * 0.55), cy - int(doc_h * 0.50)
+        dx1, dy1 = cx + int(doc_w * 0.15), cy + int(doc_h * 0.45)
+        doc_fill = (255, 255, 255, 235) if mode == "light" else (20, 22, 26, 235)
+        doc_border = ring + (200,)
+        try:
+            draw.rounded_rectangle((dx0, dy0, dx1, dy1), radius=int(r2 * 0.12), fill=doc_fill, outline=doc_border, width=max(2, int(W * 0.004)))
+        except Exception:
+            draw.rectangle((dx0, dy0, dx1, dy1), fill=doc_fill, outline=doc_border, width=max(2, int(W * 0.004)))
+
+        # Folded corner
+        fold = int(min(dx1-dx0, dy1-dy0) * 0.18)
+        fold_poly = [(dx1-fold, dy0), (dx1, dy0), (dx1, dy0+fold)]
+        draw.polygon(fold_poly, fill=(255,255,255,200) if mode=="light" else (34,36,42,220))
+        draw.line([(dx1-fold, dy0), (dx1, dy0), (dx1, dy0+fold)], fill=doc_border, width=max(1, int(W*0.002)))
+
+        # Spreadsheet grid hint inside document
+        gcol = (ring[0], ring[1], ring[2], 120)
+        for i in range(1,4):
+            x = dx0 + int((dx1-dx0) * (i/4.5))
+            draw.line([(x, dy0+int((dy1-dy0)*0.20)), (x, dy1-int((dy1-dy0)*0.15))], fill=gcol, width=max(1, int(W*0.002)))
+        for j in range(1,5):
+            y = dy0 + int((dy1-dy0) * (j/6.0))
+            draw.line([(dx0+int((dx1-dx0)*0.07), y), (dx1-int((dx1-dx0)*0.07), y)], fill=gcol, width=max(1, int(W*0.002)))
+
+        # Conversion arrow (to the right of the sheet)
+        ax0 = dx1 + int(r2*0.05); ay0 = cy - int(r2*0.10)
+        ax1 = dx1 + int(r2*0.40); ay1 = cy + int(r2*0.10)
+        draw.rounded_rectangle((ax0, ay0, ax1, ay1), radius=int(r2*0.05), fill=(ring[0],ring[1],ring[2],180))
+        tri = [(ax1-int(r2*0.02), cy), (ax1-int(r2*0.10), ay0), (ax1-int(r2*0.10), ay1)]
+        draw.polygon(tri, fill=(ring[0],ring[1],ring[2],200))
+
+        # Power system hint: small 3-node network at bottom-left of sheet
+        nx = dx0 + int((dx1-dx0)*0.22)
+        ny = dy1 - int((dy1-dy0)*0.20)
+        r = max(2, int(W*0.01))
+        nodes = [(nx, ny), (nx-int(r2*0.12), ny-int(r2*0.08)), (nx+int(r2*0.12), ny-int(r2*0.10))]
+        # lines
+        draw.line([nodes[0], nodes[1]], fill=doc_border, width=max(2, int(W*0.004)))
+        draw.line([nodes[0], nodes[2]], fill=doc_border, width=max(2, int(W*0.004)))
+        for (px,py) in nodes:
+            draw.ellipse((px-r,py-r,px+r,py+r), fill=doc_border)
+
+        out = img.resize((256, 256), Image.LANCZOS)
+        out.save(path)
+        return out
+
+    try:
+        if not out_light.exists():
+            make_variant("light", out_light)
+        if not out_dark.exists():
+            make_variant("dark", out_dark)
+        if not out_ico.exists():
+            # Build multi-size ICO from the light variant
+            im = Image.open(out_light) if out_light.exists() else make_variant("light", out_light)
+            im.save(out_ico, sizes=[(256,256),(128,128),(64,64),(32,32),(16,16)])
+    except Exception:
+        pass
+
+def setup_appearance(initial_mode: str = "light") -> tuple[str, str, int, int, dict, str]:
+    """CustomTkinter global theme + fonts + colors (single light theme)."""
+    # Force light mode
+    mode = "light"
+    ctk.set_appearance_mode("light")
+    ctk.set_default_color_theme("blue")
+
+    # Cross-platform typefaces
     if platform.system() == "Darwin":
         ui_font = "SF Pro Text"
         mono_font = "Menlo"
@@ -203,35 +354,51 @@ def setup_appearance() -> tuple[str, str, int, int, dict]:
         mono_font = "Liberation Mono"
 
     ui_size = 12
-    header_size = 20
-    colors = {
-        "BG": "#F7F8FA",
-        "CARD": "#FFFFFF",
-        "ACCENT": "#2563EB",
-        "ACCENT_HOVER": "#1D4ED8",
-        "MUTED": "#6B7280",
-        "BORDER": "#E5E7EB",
-        "TEXT": "#0B0F19",
-        "CONSOLE_BG": "#0B0F19",
-        "CONSOLE_FG": "#F9FAFB",
-    }
-    return ui_font, mono_font, ui_size, header_size, colors
+    header_size = 18
+
+    def palette() -> dict:
+        # Light theme only
+        return {
+            "BG": "#F7F8FA",
+            "CARD": "#FFFFFF",
+            "TEXT": "#0B0F19",
+            "MUTED": "#6B7280",
+            "BORDER": "#E5E7EB",
+            "ACCENT": "#A78BFA",
+            "ACCENT_HOVER": "#8B5CF6",
+            "ACCENT_SOFT": "#F1EDFE",
+            "ACCENT_SOFT_HOVER": "#E6E0FD",
+            "DANGER": "#F43F5E",
+            "DANGER_HOVER": "#E11D48",
+            "CONSOLE_BG": "#0F172A",
+            "CONSOLE_FG": "#E5E7EB",
+            "INPUT_BG": "#FFFFFF",
+            "INPUT_FG": "#0B0F19",
+            "INPUT_BORDER": "#D1D5DB",
+        }
+
+    colors = palette()
+    return ui_font, mono_font, ui_size, header_size, colors, mode
 
 # ----- App --------------------------------------------------------------------
 class App(ctk.CTk):
     def __init__(self):
         super().__init__()
+        try:
+            ensure_brand_assets()
+        except Exception:
+            pass
         self._icon_ref = set_window_icon(self)  # keep ref
         self.title(APP_NAME)
         self.geometry("1180x720")
 
-        # theme
-        self.UI_FONT, self.MONO_FONT, self.UI_SIZE, self.HEADER_SIZE, self.COL = setup_appearance()
+        # theme (light only)
+        conf = load_conf()
+        self.UI_FONT, self.MONO_FONT, self.UI_SIZE, self.HEADER_SIZE, self.COL, _ = setup_appearance("light")
         self.configure(fg_color=self.COL["BG"])
 
         # state
         self.events: "queue.Queue[tuple[str, object]]" = queue.Queue()
-        conf = load_conf()
         self.in_path = tk.StringVar(value=conf.get("last_input", ""))
         self.out_path = tk.StringVar(value=conf.get("last_output", str(Path.cwd() / "CYME_Extract.xlsx")))
         self.sheet_vars: dict[str, tk.BooleanVar] = {name: tk.BooleanVar(value=DEFAULT_SHEETS[name]) for name in DEFAULT_SHEETS}
@@ -242,53 +409,105 @@ class App(ctk.CTk):
         # UI
         self._build_header()
         self._build_tabs()
+        # (No dark mode — single palette already applied)
         self._poll_events()
 
     # -- header
     def _build_header(self):
-        header = ctk.CTkFrame(self, fg_color=self.COL["BG"], corner_radius=0)
-        header.pack(fill="x", padx=24, pady=(16, 8))
+        self.header = ctk.CTkFrame(self, fg_color=self.COL["BG"], corner_radius=0)
+        # tighter top spacing
+        self.header.pack(fill="x", padx=24, pady=(0, 0))
+        try:
+            self.header.pack_propagate(False)
+            self.header.configure(height=40)
+        except Exception:
+            pass
 
-        # --- brand: image logo; no bolt/canvas ---
-        logo_png = resource_path("icons", "nature.png")
-        logo_ico = resource_path("icons", "nature.ico")
-
-        brand_holder = tk.Frame(header, width=52, height=52, bg=self.COL["BG"])
-        brand_holder.pack_propagate(False)
-        brand_holder.pack(side="left", padx=(2, 14))
-
-        img_obj = None
-        if logo_png.exists():
-            try:
-                img_obj = tk.PhotoImage(file=str(logo_png))
-            except Exception:
-                img_obj = None
-        elif logo_ico.exists():
-            # PhotoImage cannot load .ico; try Pillow if available, else skip header image.
-            try:
-                from PIL import Image, ImageTk  # type: ignore[reportMissingImports]
-                im = Image.open(str(logo_ico)).resize((52, 52))
-                img_obj = ImageTk.PhotoImage(im)
-            except Exception:
-                img_obj = None
-
-        if img_obj is not None:
-            self._brand_img_ref = img_obj  # keep ref
-            tk.Label(brand_holder, image=img_obj, bg=self.COL["BG"], bd=0).pack(fill="both", expand=True)
+        # --- brand: logo (light only) ---
+        from PIL import Image  # type: ignore
+        logo_png = resource_path("icons", "cyme_logo_light.png")
+        if not logo_png.exists():
+            logo_png = resource_path("icons", "nature.png")
+        try:
+            self.brand_img = ctk.CTkImage(light_image=Image.open(str(logo_png)), size=(28, 28))
+            self.brand_img_label = ctk.CTkLabel(self.header, image=self.brand_img, text="", fg_color=self.COL["BG"])
+            self.brand_img_label.pack(side="left", padx=(2, 8), pady=0)
+        except Exception:
+            pass
 
 
-        title = ctk.CTkLabel(header, text=APP_NAME, font=(self.UI_FONT, self.HEADER_SIZE, "bold"), text_color=self.COL["TEXT"])
-        title.pack(side="left", pady=4)
+        title = ctk.CTkLabel(self.header, text=APP_NAME, font=(self.UI_FONT, self.HEADER_SIZE, "bold"), text_color=self.COL["TEXT"]) 
+        title.pack(side="left", pady=0)
+
+        # Right side spacer (no theme switch)
+        right = ctk.CTkFrame(self.header, fg_color=self.COL["BG"])
+        right.pack(side="right")
+
+    def _build_theme_switch(self, parent: ctk.CTkFrame):
+        # Build small sun/moon icons (Pillow), with fallback to text if Pillow missing
+        self.sun_icon = None
+        self.moon_icon = None
+        try:
+            from PIL import Image, ImageDraw, ImageTk  # type: ignore
+            def sun_img(color: str) -> tk.PhotoImage:
+                W = 18
+                im = Image.new("RGBA", (W, W), (0,0,0,0))
+                d = ImageDraw.Draw(im)
+                # core
+                d.ellipse((4,4,14,14), fill=color)
+                # rays
+                for a in range(0,360,45):
+                    # tiny rectangles as rays
+                    d.pieslice((1,1,17,17), a-2, a+2, fill=color)
+                return ImageTk.PhotoImage(im)
+            def moon_img(color: str) -> tk.PhotoImage:
+                W = 18
+                im = Image.new("RGBA", (W, W), (0,0,0,0))
+                d = ImageDraw.Draw(im)
+                d.ellipse((3,3,15,15), fill=color)
+                d.ellipse((7,3,17,15), fill=(0,0,0,0))
+                return ImageTk.PhotoImage(im)
+            self.sun_icon = sun_img(self.COL["TEXT"])
+            self.moon_icon = moon_img(self.COL["TEXT"])
+        except Exception:
+            pass
+
+        row = ctk.CTkFrame(parent, fg_color=self.COL["BG"])
+        row.pack(side="right")
+        self.sun_lbl = ctk.CTkLabel(row, text="", image=self.sun_icon, text_color=self.COL["TEXT"]) if self.sun_icon else ctk.CTkLabel(row, text="☀", text_color=self.COL["TEXT"]) 
+        self.sun_lbl.pack(side="left", padx=(0,6))
+        self.theme_bool = tk.IntVar(value=1 if self.theme_mode == "dark" else 0)
+        self.theme_switch = ctk.CTkSwitch(row, text="", command=self._on_theme_switch,
+                                          variable=self.theme_bool, onvalue=1, offvalue=0,
+                                          width=52, height=28, progress_color=self.COL["ACCENT"])
+        self.theme_switch.pack(side="left")
+        self.moon_lbl = ctk.CTkLabel(row, text="", image=self.moon_icon, text_color=self.COL["TEXT"]) if self.moon_icon else ctk.CTkLabel(row, text="🌙", text_color=self.COL["TEXT"]) 
+        self.moon_lbl.pack(side="left", padx=(6,0))
 
     # -- tabs
     def _build_tabs(self):
-        tabs = ctk.CTkTabview(self, fg_color=self.COL["BG"],
-                              segmented_button_selected_color=self.COL["ACCENT"],
-                              segmented_button_selected_hover_color=self.COL["ACCENT_HOVER"])
-        tabs.pack(fill="both", expand=True, padx=24, pady=(6, 14))
+        self.tabs = ctk.CTkTabview(self, fg_color=self.COL["BG"],
+                                   segmented_button_selected_color=self.COL["ACCENT"],
+                                   segmented_button_selected_hover_color=self.COL["ACCENT_HOVER"])
+        # reduce space above segmented tabs further
+        self.tabs.pack(fill="both", expand=True, padx=24, pady=(0, 2))
+        try:
+            seg = self.tabs._segmented_button
+            seg.configure(font=(self.UI_FONT, self.UI_SIZE + 2), height=34, corner_radius=10)
+            # try to remove internal padding regardless of geometry manager
+            try:
+                seg.grid_configure(pady=0, ipady=0)
+            except Exception:
+                pass
+            try:
+                seg.pack_configure(pady=0, ipady=0)
+            except Exception:
+                pass
+        except Exception:
+            pass
 
-        self.tab_run = tabs.add("Run")
-        self.tab_islands = tabs.add("Islands")
+        self.tab_run = self.tabs.add("Run")
+        self.tab_islands = self.tabs.add("Islands")
 
         self._build_run_tab(self.tab_run)
         self._build_islands_tab(self.tab_islands)
@@ -296,15 +515,17 @@ class App(ctk.CTk):
     # -- run tab
     def _build_run_tab(self, parent: ctk.CTkFrame):
         # card: file inputs
-        card = ctk.CTkFrame(parent, fg_color=self.COL["CARD"], corner_radius=16)
-        card.pack(fill="x", padx=4, pady=(6, 10))
+        self.run_card_file = ctk.CTkFrame(parent, fg_color=self.COL["CARD"], corner_radius=16)
+        self.run_card_file.pack(fill="x", padx=4, pady=(6, 10))
 
         # input row
-        row1 = ctk.CTkFrame(card, fg_color=self.COL["CARD"], corner_radius=0)
+        row1 = ctk.CTkFrame(self.run_card_file, fg_color=self.COL["CARD"], corner_radius=0)
         row1.pack(fill="x", padx=18, pady=(18, 8))
-        ctk.CTkLabel(row1, text="CYME File    ", font=(self.UI_FONT, self.UI_SIZE)).pack(side="left", padx=(2, 12))
-        self.in_entry = ctk.CTkEntry(row1, textvariable=self.in_path, width=580, height=38, font=(self.UI_FONT, self.UI_SIZE))
-        self.in_entry.pack(side="left", padx=(0, 12))
+        self.run_row1 = row1
+        ctk.CTkLabel(row1, text="CYME File    ", font=(self.UI_FONT, self.UI_SIZE), text_color=self.COL["TEXT"]).pack(side="left", padx=(2, 12))
+        self.in_entry = ctk.CTkEntry(row1, textvariable=self.in_path, height=38, font=(self.UI_FONT, self.UI_SIZE))
+        # expand entry to fill available horizontal space
+        self.in_entry.pack(side="left", padx=(0, 12), fill="x", expand=True)
         ctk.CTkButton(row1, text="Browse…", command=self._browse_in,
                       fg_color=self.COL["ACCENT"], hover_color=self.COL["ACCENT_HOVER"],
                       font=(self.UI_FONT, self.UI_SIZE), height=38, corner_radius=10).pack(side="left", padx=(0, 8))
@@ -313,11 +534,12 @@ class App(ctk.CTk):
                       font=(self.UI_FONT, self.UI_SIZE), height=38, corner_radius=10).pack(side="left", padx=(0, 4))
 
         # output row
-        row2 = ctk.CTkFrame(card, fg_color=self.COL["CARD"], corner_radius=0)
+        row2 = ctk.CTkFrame(self.run_card_file, fg_color=self.COL["CARD"], corner_radius=0)
         row2.pack(fill="x", padx=18, pady=(6, 18))
-        ctk.CTkLabel(row2, text="Output Excel", font=(self.UI_FONT, self.UI_SIZE)).pack(side="left", padx=(2, 12))
-        self.out_entry = ctk.CTkEntry(row2, textvariable=self.out_path, width=580, height=38, font=(self.UI_FONT, self.UI_SIZE))
-        self.out_entry.pack(side="left", padx=(0, 12))
+        self.run_row2 = row2
+        ctk.CTkLabel(row2, text="Output Excel", font=(self.UI_FONT, self.UI_SIZE), text_color=self.COL["TEXT"]).pack(side="left", padx=(2, 12))
+        self.out_entry = ctk.CTkEntry(row2, textvariable=self.out_path, height=38, font=(self.UI_FONT, self.UI_SIZE))
+        self.out_entry.pack(side="left", padx=(0, 12), fill="x", expand=True)
         ctk.CTkButton(row2, text="Save As…", command=self._browse_out,
                       fg_color=self.COL["ACCENT"], hover_color=self.COL["ACCENT_HOVER"],
                       font=(self.UI_FONT, self.UI_SIZE), height=38, corner_radius=10).pack(side="left", padx=(0, 8))
@@ -328,7 +550,7 @@ class App(ctk.CTk):
         # card: sheets with responsive layout
         self.checks_card = ctk.CTkFrame(parent, fg_color=self.COL["CARD"], corner_radius=16)
         self.checks_card.pack(fill="x", padx=4, pady=(6, 10))
-        ctk.CTkLabel(self.checks_card, text="Sheets", font=(self.UI_FONT, self.UI_SIZE, "bold")).pack(anchor="w", padx=18, pady=(14, 0))
+        ctk.CTkLabel(self.checks_card, text="Sheets", font=(self.UI_FONT, self.UI_SIZE, "bold"), text_color=self.COL["TEXT"]).pack(anchor="w", padx=18, pady=(14, 0))
 
         self.checks_grid = ctk.CTkFrame(self.checks_card, fg_color=self.COL["CARD"])
         self.checks_grid.pack(fill="x", padx=12, pady=8)
@@ -345,6 +567,7 @@ class App(ctk.CTk):
                 fg_color=self.COL["ACCENT"],
                 hover_color=self.COL["ACCENT_HOVER"],
                 font=(self.UI_FONT, check_font_size),
+                text_color=self.COL["TEXT"],
             )
             self._sheet_checks.append(cb)
         # responsive layout
@@ -352,24 +575,25 @@ class App(ctk.CTk):
         self._relayout_sheet_checks()  # initial
 
         # actions
-        actions = ctk.CTkFrame(parent, fg_color=self.COL["CARD"], corner_radius=16)
-        actions.pack(fill="x", padx=4, pady=(6, 10))
-        self.run_btn = ctk.CTkButton(actions, text="Process", command=self._start_run,
+        self.run_actions = ctk.CTkFrame(parent, fg_color=self.COL["CARD"], corner_radius=16)
+        self.run_actions.pack(fill="x", padx=4, pady=(6, 10))
+        self.run_btn = ctk.CTkButton(self.run_actions, text="Process", command=self._start_run,
                                      fg_color=self.COL["ACCENT"], hover_color=self.COL["ACCENT_HOVER"],
                                      font=(self.UI_FONT, self.UI_SIZE), height=42, corner_radius=14)
         self.run_btn.pack(side="left", padx=18, pady=14)
-        ctk.CTkButton(actions, text="Quit", command=self.destroy,
-                      fg_color="#F43F5E", hover_color="#E11D48",
-                      font=(self.UI_FONT, self.UI_SIZE), height=42, corner_radius=14).pack(side="right", padx=18, pady=14)
+        self.quit_btn = ctk.CTkButton(self.run_actions, text="Quit", command=self.destroy,
+                                      fg_color=self.COL["DANGER"], hover_color=self.COL["DANGER_HOVER"],
+                                      font=(self.UI_FONT, self.UI_SIZE), height=42, corner_radius=14)
+        self.quit_btn.pack(side="right", padx=18, pady=14)
 
         # console
-        console = ctk.CTkFrame(parent, fg_color=self.COL["CARD"], corner_radius=16)
-        console.pack(fill="both", expand=True, padx=4, pady=(6, 10))
-        self.pbar = ctk.CTkProgressBar(console, height=10, corner_radius=8, progress_color=self.COL["ACCENT"])
+        self.run_console = ctk.CTkFrame(parent, fg_color=self.COL["CARD"], corner_radius=16)
+        self.run_console.pack(fill="both", expand=True, padx=4, pady=(6, 10))
+        self.pbar = ctk.CTkProgressBar(self.run_console, height=10, corner_radius=8, progress_color=self.COL["ACCENT"])
         self.pbar.pack(fill="x", padx=18, pady=(16, 8))
         self.pbar.set(0.0)
 
-        self.log = ctk.CTkTextbox(console, corner_radius=12, font=(self.MONO_FONT, self.UI_SIZE),
+        self.log = ctk.CTkTextbox(self.run_console, corner_radius=12, font=(self.MONO_FONT, self.UI_SIZE),
                                   fg_color=self.COL["CONSOLE_BG"], text_color=self.COL["CONSOLE_FG"])
         self.log.pack(fill="both", expand=True, padx=18, pady=(6, 18))
         self.log.configure(state="disabled")
@@ -405,33 +629,43 @@ class App(ctk.CTk):
     # -- islands tab
     def _build_islands_tab(self, parent: ctk.CTkFrame):
         # top controls
-        controls = ctk.CTkFrame(parent, fg_color=self.COL["CARD"], corner_radius=16)
-        controls.pack(fill="x", padx=4, pady=(6, 10))
+        self.island_controls = ctk.CTkFrame(parent, fg_color=self.COL["CARD"], corner_radius=16)
+        self.island_controls.pack(fill="x", padx=4, pady=(6, 10))
 
-        left = ctk.CTkFrame(controls, fg_color=self.COL["CARD"])
+        left = ctk.CTkFrame(self.island_controls, fg_color=self.COL["CARD"])
         left.pack(side="left", padx=18, pady=12)
-        ctk.CTkLabel(left, text="Click a row to set the Active Island.", font=(self.UI_FONT, self.UI_SIZE, "bold")).pack(anchor="w")
+        ctk.CTkLabel(left, text="Click a row to set the Active Island.", font=(self.UI_FONT, self.UI_SIZE, "bold"), text_color=self.COL["TEXT"]).pack(anchor="w")
         self.active_island_label = ctk.CTkLabel(left, text="Active island: (none)", font=(self.UI_FONT, self.UI_SIZE), text_color=self.COL["MUTED"])
         self.active_island_label.pack(anchor="w", pady=(6, 0))
 
-        right = ctk.CTkFrame(controls, fg_color=self.COL["CARD"])
+        right = ctk.CTkFrame(self.island_controls, fg_color=self.COL["CARD"])
         right.pack(side="right", padx=18, pady=12)
-        ctk.CTkButton(right, text="Analyze Islands", command=self._analyze_islands_only,
-                      fg_color=self.COL["ACCENT"], hover_color=self.COL["ACCENT_HOVER"],
-                      font=(self.UI_FONT, self.UI_SIZE), height=36, corner_radius=12).pack(side="left", padx=(0, 8))
-        ctk.CTkButton(right, text="Reset", command=self._reset_active_island,
-                      fg_color="#EEF2FF", hover_color="#E0E7FF", text_color=self.COL["ACCENT"],
-                      font=(self.UI_FONT, self.UI_SIZE), height=36, corner_radius=12).pack(side="left")
+        self.btn_analyze = ctk.CTkButton(right, text="Analyze Islands", command=self._analyze_islands_only,
+                                         fg_color=self.COL["ACCENT"], hover_color=self.COL["ACCENT_HOVER"],
+                                         font=(self.UI_FONT, self.UI_SIZE), height=36, corner_radius=12)
+        self.btn_analyze.pack(side="left", padx=(0, 8))
+        self.btn_island_reset = ctk.CTkButton(right, text="Reset", command=self._reset_active_island,
+                                              fg_color=self.COL["ACCENT_SOFT"], hover_color=self.COL["ACCENT_SOFT_HOVER"], text_color=self.COL["ACCENT"],
+                                              font=(self.UI_FONT, self.UI_SIZE), height=36, corner_radius=12)
+        self.btn_island_reset.pack(side="left")
 
         # adjustable split: table over (bus list + summary)
-        outer = ctk.CTkFrame(parent, fg_color=self.COL["CARD"], corner_radius=16)
-        outer.pack(fill="both", expand=True, padx=4, pady=(6, 10))
+        self.island_outer = ctk.CTkFrame(parent, fg_color=self.COL["CARD"], corner_radius=16)
+        self.island_outer.pack(fill="both", expand=True, padx=4, pady=(6, 10))
 
-        vpane = ttk.Panedwindow(outer, orient="vertical")
+        # ttk container styles to avoid light patches in dark mode
+        style = ttk.Style()
+        try:
+            style.configure("Card.TFrame", background=self.COL["CARD"])
+            style.configure("Card.TPanedwindow", background=self.COL["CARD"]) 
+        except Exception:
+            pass
+
+        vpane = ttk.Panedwindow(self.island_outer, orient="vertical", style="Card.TPanedwindow")
         vpane.pack(fill="both", expand=True, padx=8, pady=8)
 
-        top = ttk.Frame(vpane)
-        bottom = ttk.Frame(vpane)
+        top = ttk.Frame(vpane, style="Card.TFrame")
+        bottom = ttk.Frame(vpane, style="Card.TFrame")
         vpane.add(top, weight=3)
         vpane.add(bottom, weight=2)
 
@@ -456,27 +690,221 @@ class App(ctk.CTk):
         self.tree.bind("<ButtonRelease-1>", self._on_island_click)
 
         # bottom: horizontal split (bus list | summary)
-        hpane = ttk.Panedwindow(bottom, orient="horizontal")
+        hpane = ttk.Panedwindow(bottom, orient="horizontal", style="Card.TPanedwindow")
         hpane.pack(fill="both", expand=True)
 
-        buses_frame = ttk.Frame(hpane)
-        summary_frame = ttk.Frame(hpane)
+        buses_frame = ttk.Frame(hpane, style="Card.TFrame")
+        summary_frame = ttk.Frame(hpane, style="Card.TFrame")
         hpane.add(buses_frame, weight=1)
         hpane.add(summary_frame, weight=1)
 
         # bus list
-        tk.Label(buses_frame, text="Buses in selected island:", font=(self.UI_FONT, self.UI_SIZE, "bold")).pack(anchor="w", padx=8, pady=(6, 0))
+        ctk.CTkLabel(buses_frame, text="Buses in selected island:", font=(self.UI_FONT, self.UI_SIZE, "bold"), text_color=self.COL["TEXT"], fg_color=self.COL["CARD"]).pack(anchor="w", padx=8, pady=(6, 0))
         self.bus_list = ctk.CTkTextbox(buses_frame, corner_radius=10, font=(self.MONO_FONT, self.UI_SIZE),
-                                       fg_color="#111827", text_color="#E5E7EB")
+                                       fg_color=self.COL["CONSOLE_BG"], text_color=self.COL["CONSOLE_FG"])
         self.bus_list.pack(fill="both", expand=True, padx=8, pady=8)
         self.bus_list.configure(state="disabled")
 
         # summary console
-        tk.Label(summary_frame, text="Island summary:", font=(self.UI_FONT, self.UI_SIZE, "bold")).pack(anchor="w", padx=8, pady=(6, 0))
+        ctk.CTkLabel(summary_frame, text="Island summary:", font=(self.UI_FONT, self.UI_SIZE, "bold"), text_color=self.COL["TEXT"], fg_color=self.COL["CARD"]).pack(anchor="w", padx=8, pady=(6, 0))
         self.island_summary = ctk.CTkTextbox(summary_frame, corner_radius=10, font=(self.MONO_FONT, self.UI_SIZE),
-                                             fg_color="#111827", text_color="#E5E7EB")
+                                             fg_color=self.COL["CONSOLE_BG"], text_color=self.COL["CONSOLE_FG"])
         self.island_summary.pack(fill="both", expand=True, padx=8, pady=8)
         self.island_summary.configure(state="disabled")
+
+    # -- theme switching
+    def _on_theme_change(self, value: str):
+        mode = (value or "").lower()
+        if mode not in ("light", "dark"):
+            return
+        self._apply_theme(mode)
+        save_conf({"theme": mode})
+
+    def _on_theme_switch(self):
+        mode = "dark" if int(self.theme_bool.get() or 0) == 1 else "light"
+        self._apply_theme(mode)
+        save_conf({"theme": mode})
+
+    def _apply_theme(self, mode: str):
+        # Update global appearance
+        ctk.set_appearance_mode(mode)
+        # Refresh palette
+        _, _, _, _, self.COL, _ = setup_appearance(mode)
+
+        # Root + header
+        try:
+            self.configure(fg_color=self.COL["BG"])
+            self.header.configure(fg_color=self.COL["BG"])
+            if hasattr(self, "theme_switch"):
+                try:
+                    self.theme_switch.configure(progress_color=self.COL["ACCENT"]) 
+                    self.sun_lbl.configure(text_color=self.COL["TEXT"]) 
+                    self.moon_lbl.configure(text_color=self.COL["TEXT"]) 
+                    # refresh icons to match text color
+                    try:
+                        from PIL import Image, ImageDraw, ImageTk  # type: ignore
+                        def _sun(color: str):
+                            W=18; im=Image.new("RGBA",(W,W),(0,0,0,0)); d=ImageDraw.Draw(im)
+                            d.ellipse((4,4,14,14), fill=color)
+                            for a in range(0,360,45):
+                                d.pieslice((1,1,17,17), a-2, a+2, fill=color)
+                            return ImageTk.PhotoImage(im)
+                        def _moon(color: str):
+                            W=18; im=Image.new("RGBA",(W,W),(0,0,0,0)); d=ImageDraw.Draw(im)
+                            d.ellipse((3,3,15,15), fill=color); d.ellipse((7,3,17,15), fill=(0,0,0,0))
+                            return ImageTk.PhotoImage(im)
+                        self.sun_icon = _sun(self.COL["TEXT"])
+                        self.moon_icon = _moon(self.COL["TEXT"])
+                        self.sun_lbl.configure(image=self.sun_icon)
+                        self.moon_lbl.configure(image=self.moon_icon)
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+            # brand holder + image bg
+            if hasattr(self, "brand_holder"):
+                try:
+                    self.brand_holder.configure(bg=self.COL["BG"])
+                    for ch in self.brand_holder.winfo_children():
+                        try:
+                            ch.configure(bg=self.COL["BG"])
+                        except Exception:
+                            pass
+                    # swap brand image for current mode
+                    try:
+                        logo_png = resource_path("icons", f"cyme_logo_{mode}.png")
+                        if not logo_png.exists():
+                            logo_png = resource_path("icons", "cyme_logo_light.png")
+                        if logo_png.exists() and hasattr(self, "brand_img_label"):
+                            new_img = tk.PhotoImage(file=str(logo_png))
+                            self._brand_img_ref = new_img
+                            self.brand_img_label.configure(image=new_img)
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # Tabs
+        try:
+            self.tabs.configure(fg_color=self.COL["BG"],
+                                segmented_button_selected_color=self.COL["ACCENT"],
+                                segmented_button_selected_hover_color=self.COL["ACCENT_HOVER"])
+            try:
+                seg = self.tabs._segmented_button
+                seg.configure(font=(self.UI_FONT, self.UI_SIZE + 2), height=36, corner_radius=12)
+            except Exception:
+                pass
+        except Exception:
+            pass
+
+        # Run tab containers
+        for f in (getattr(self, "run_card_file", None), getattr(self, "checks_card", None), getattr(self, "run_actions", None), getattr(self, "run_console", None)):
+            if f is not None:
+                try:
+                    f.configure(fg_color=self.COL["CARD"])
+                except Exception:
+                    pass
+
+        # Buttons in row1/row2 (by discovery to avoid strict references)
+        try:
+            # row1: label, entry, [browse], [open folder]
+            for w in getattr(self, "run_row1", None).winfo_children():
+                if isinstance(w, ctk.CTkButton):
+                    txt = (w.cget("text") or "").lower()
+                    if "browse" in txt:
+                        w.configure(fg_color=self.COL["ACCENT"], hover_color=self.COL["ACCENT_HOVER"], text_color=None)
+                    else:
+                        w.configure(fg_color=self.COL["ACCENT_SOFT"], hover_color=self.COL["ACCENT_SOFT_HOVER"], text_color=self.COL["ACCENT"])
+        except Exception:
+            pass
+        try:
+            # row2: label, entry, [save as], [open folder]
+            for w in getattr(self, "run_row2", None).winfo_children():
+                if isinstance(w, ctk.CTkButton):
+                    txt = (w.cget("text") or "").lower()
+                    if "save" in txt:
+                        w.configure(fg_color=self.COL["ACCENT"], hover_color=self.COL["ACCENT_HOVER"], text_color=None)
+                    else:
+                        w.configure(fg_color=self.COL["ACCENT_SOFT"], hover_color=self.COL["ACCENT_SOFT_HOVER"], text_color=self.COL["ACCENT"])
+        except Exception:
+            pass
+
+        # Primary and danger
+        try:
+            self.run_btn.configure(fg_color=self.COL["ACCENT"], hover_color=self.COL["ACCENT_HOVER"])
+            self.quit_btn.configure(fg_color=self.COL["DANGER"], hover_color=self.COL["DANGER_HOVER"])
+        except Exception:
+            pass
+
+        # Entries styling (file selections)
+        try:
+            self.in_entry.configure(fg_color=self.COL["INPUT_BG"], border_color=self.COL["INPUT_BORDER"], text_color=self.COL["INPUT_FG"]) 
+            self.out_entry.configure(fg_color=self.COL["INPUT_BG"], border_color=self.COL["INPUT_BORDER"], text_color=self.COL["INPUT_FG"]) 
+        except Exception:
+            pass
+
+        # Checkboxes accents
+        try:
+            for cb in getattr(self, "_sheet_checks", []):
+                cb.configure(fg_color=self.COL["ACCENT"], hover_color=self.COL["ACCENT_HOVER"], text_color=self.COL["TEXT"], border_color=self.COL["BORDER"])
+        except Exception:
+            pass
+
+        # Console + pbar
+        try:
+            self.pbar.configure(progress_color=self.COL["ACCENT"], fg_color=self.COL["BORDER"])  # track color
+            self.log.configure(fg_color=self.COL["CONSOLE_BG"], text_color=self.COL["CONSOLE_FG"])
+        except Exception:
+            pass
+
+        # Islands tab frames + controls
+        for f in (getattr(self, "island_controls", None), getattr(self, "island_outer", None)):
+            if f is not None:
+                try:
+                    f.configure(fg_color=self.COL["CARD"])
+                except Exception:
+                    pass
+        try:
+            self.btn_analyze.configure(fg_color=self.COL["ACCENT"], hover_color=self.COL["ACCENT_HOVER"])
+            self.btn_island_reset.configure(fg_color=self.COL["ACCENT_SOFT"], hover_color=self.COL["ACCENT_SOFT_HOVER"], text_color=self.COL["ACCENT"])
+            self.bus_list.configure(fg_color=self.COL["CONSOLE_BG"], text_color=self.COL["CONSOLE_FG"])
+            self.island_summary.configure(fg_color=self.COL["CONSOLE_BG"], text_color=self.COL["CONSOLE_FG"])
+            self.active_island_label.configure(text_color=self.COL["MUTED"])
+        except Exception:
+            pass
+
+        # ttk look (Treeview)
+        try:
+            style = ttk.Style()
+            try:
+                style.theme_use("clam")
+            except Exception:
+                pass
+            # Containers
+            try:
+                style.configure("Card.TFrame", background=self.COL["CARD"])
+                style.configure("Card.TPanedwindow", background=self.COL["CARD"]) 
+                style.configure("TFrame", background=self.COL["CARD"]) 
+                style.configure("TPanedwindow", background=self.COL["CARD"]) 
+            except Exception:
+                pass
+            style.configure("Treeview",
+                            background=self.COL["CARD"],
+                            fieldbackground=self.COL["CARD"],
+                            foreground=self.COL["TEXT"],
+                            bordercolor=self.COL["BORDER"],
+                            rowheight=24)
+            style.configure("Treeview.Heading",
+                            background=self.COL["BG"],
+                            foreground=self.COL["TEXT"],
+                            bordercolor=self.COL["BORDER"])
+            style.map("Treeview",
+                      background=[("selected", self.COL["ACCENT_SOFT"])],
+                      foreground=[("selected", self.COL["TEXT"])])
+        except Exception:
+            pass
 
     # ----- helpers (file picks, folders) --------------------------------------
     def _browse_in(self):
