@@ -5,7 +5,7 @@ import re
 import xml.etree.ElementTree as ET
 from typing import Dict, List, Tuple, Any, Optional
 from Modules.General import safe_name
-from Modules.IslandFilter import should_comment_branch
+from Modules.IslandFilter import should_comment_branch, should_drop_branch, drop_mode_enabled
 
 # ------------------------
 # Small helpers
@@ -281,6 +281,9 @@ def _parse_multiphase_2w_rows(input_path: Path) -> List[List[Any]]:
         to_active   = to_bus in active_bases
         island_exclude = should_comment_branch(from_bus, to_bus)
         comment = (not from_active) or (not to_active) or island_exclude
+        # Drop entirely if policy says remove
+        if drop_mode_enabled() and (should_drop_branch(from_bus, to_bus) or (not from_active) or (not to_active)):
+            continue
         rid_out = f"//{rid}" if comment else rid
 
         rows.append([

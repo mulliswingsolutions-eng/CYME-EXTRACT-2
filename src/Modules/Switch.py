@@ -5,7 +5,7 @@ import re
 import xml.etree.ElementTree as ET
 from typing import List, Tuple
 from Modules.General import safe_name
-from Modules.IslandFilter import should_comment_branch
+from Modules.IslandFilter import should_comment_branch, drop_mode_enabled
 
 PHASES = ("A", "B", "C")
 SUFFIX = {"A": "_a", "B": "_b", "C": "_c"}
@@ -166,6 +166,8 @@ def _rows_from_file(txt_path: Path) -> List[Tuple[str, str, str, int]]:
                     rid = f"{base_id}{SUFFIX[p]}"
 
                     # Comment by prefixing the **From Bus** cell
+                    if drop_mode_enabled() and _comment_row():
+                        continue
                     fb_out = f"//{fb}" if _comment_row() else fb
                     rows.append((fb_out, tb, rid, 1 if is_closed else 0))
 
@@ -186,6 +188,8 @@ def _rows_from_file(txt_path: Path) -> List[Tuple[str, str, str, int]]:
                 fb = f"{from_bus}{SUFFIX[p]}"
                 tb = f"{to_bus}{SUFFIX[p]}"
                 rid = f"{base_id}{SUFFIX[p]}"
+                if drop_mode_enabled() and _comment_row():
+                    continue
                 fb_out = f"//{fb}" if _comment_row() else fb
                 rows.append((fb_out, tb, rid, 1 if is_closed else 0))
 

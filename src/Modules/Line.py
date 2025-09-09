@@ -6,7 +6,7 @@ import xml.etree.ElementTree as ET
 from typing import Dict, List, Optional, Tuple
 import re
 from Modules.Bus import extract_bus_data  # reuse Bus page logic (and comment filtering)
-from Modules.IslandFilter import should_comment_branch
+from Modules.IslandFilter import should_comment_branch, should_drop_branch, drop_mode_enabled
 from Modules.General import safe_name
 
 
@@ -287,6 +287,10 @@ def write_line_sheet(xw, input_path: Path) -> None:
         to_bus   = _mark_unknown(to_base)
 
         unknown = from_bus.endswith("_unknown") or to_bus.endswith("_unknown")
+
+        # Drop entirely if policy says remove and this row would be commented
+        if drop_mode_enabled() and (comment_for_island or unknown):
+            continue
 
         # final ID (comment if either island filter says so OR endpoint unknown)
         id_out = ("//" if (comment_for_island or unknown) else "") + item["id"]

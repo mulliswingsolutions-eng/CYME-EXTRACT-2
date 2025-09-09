@@ -6,6 +6,7 @@ import xml.etree.ElementTree as ET
 
 # replace with
 from Modules.General import safe_name, get_island_context
+from Modules.IslandFilter import is_bus_allowed
 # (optional robust fallback for standalone use)
 try:
     from Modules.General import get_island_context  # already imported above; keeps Pylance happy
@@ -438,14 +439,16 @@ def _parse_bus_rows(input_path: Path) -> List[Dict]:
 
     rows: List[Dict] = []
     for node in sorted(node_phases):
+        # Keep only buses that are allowed by the island filter
+        if not is_bus_allowed(node):
+            continue
         island = bus_to_island.get(node)
         is_in_bad_island = node in bad_buses
         is_active = active_degree.get(node, 0) > 0
 
-        # SLACK only if this node is an actual VS-page source (or island slack selected in context)
-        if node in vs_slack_nodes:
-            bus_type = "SLACK"
-        elif island is not None and slack_per_island.get(island) == node and not is_in_bad_island:
+        # SLACK only if chosen as island slack (exactly one per island)
+        # slack_per_island is computed from VS-page sources to ensure it is a real voltage source bus
+        if island is not None and slack_per_island.get(island) == node and not is_in_bad_island:
             bus_type = "SLACK"
         else:
             bus_type = "PQ"
@@ -456,7 +459,7 @@ def _parse_bus_rows(input_path: Path) -> List[Dict]:
         for ph in sorted(node_phases[node], key=pkey):
             bus_name = f"{node}_{ph.lower()}"
 
-            # comment unused or bad-island buses
+            # comment unused or bad-island buses (but only among allowed buses)
             should_comment = is_in_bad_island or (bus_type != "SLACK" and not is_active)
             if should_comment:
                 bus_name = "//" + bus_name

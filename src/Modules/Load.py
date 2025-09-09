@@ -8,7 +8,7 @@ import xml.etree.ElementTree as ET
 from collections import deque
 from typing import Dict, List, Tuple, Any, Set
 from Modules.General import safe_name
-from Modules.IslandFilter import should_comment_branch, should_comment_bus
+from Modules.IslandFilter import should_comment_branch, should_comment_bus, should_drop_bus, is_bus_allowed
 
 PHASES = ("A", "B", "C")
 PHASE_SUFFIX = {"A": "_a", "B": "_b", "C": "_c"}
@@ -437,22 +437,15 @@ def write_load_sheet(xw, input_path: Path) -> None:
     # Voltage map (built on sanitized node names)
     bus_kvll = _build_voltage_map(input_path)
 
-    # Anchors
+    # Anchors (computed dynamically to avoid empty data rows when pruning)
     r = 10
     b1_t, b1_h, b1_e = r, r + 1, r + 2; r = b1_e + 2
     b2_t, b2_h, b2_e = r, r + 1, r + 2; r = b2_e + 2
     b3_t, b3_h, b3_e = r, r + 1, r + 2; r = b3_e + 2
-    b4_t, b4_h, b4_first = r, r + 1, r + 2; b4_e = b4_first + len(single_rows); r = b4_e + 2
-    b5_t, b5_h, b5_first = r, r + 1, r + 2; b5_e = b5_first + len(two_rows); r = b5_e + 2
-    b6_t, b6_h, b6_first = r, r + 1, r + 2; b6_e = b6_first + len(three_rows)
-
-    # Top links
-    ws.write_url(1, 0, f"internal:'Load'!A{b1_h+1}:E{b1_e+1}", link_fmt, "PositiveSeqZload")
-    ws.write_url(1, 1, f"internal:'Load'!A{b6_h+1}:R{b6_e+1}", link_fmt, "ThreePhaseZIPLoad")
-    ws.write_url(2, 0, f"internal:'Load'!A{b2_h+1}:E{b2_e+1}", link_fmt, "PositiveSeqPload")
-    ws.write_url(3, 0, f"internal:'Load'!A{b3_h+1}:E{b3_e+1}", link_fmt, "PositiveSeqIload")
-    ws.write_url(4, 0, f"internal:'Load'!A{b4_h+1}:L{b4_e+1}", link_fmt, "SinglePhaseZIPLoad")
-    ws.write_url(5, 0, f"internal:'Load'!A{b5_h+1}:O{b5_e+1}", link_fmt, "TwoPhaseZIPLoad")
+    b4_t, b4_h, b4_first = r, r + 1, r + 2
+    # b4_e is set AFTER writing single_rows
+    # r advances after we know b4_e
+    # b5/b6 anchors also computed after their data is written
 
     # Notes
     ws.merge_range(7, 0, 7, 7, "Important notes:", notes_hdr)
@@ -493,6 +486,9 @@ def write_load_sheet(xw, input_path: Path) -> None:
         vkv = bus_kvll.get(bus, bus_kvll["_default_"])
         conn = (row["Conn"] or "").lower()
 
+        # Always drop loads whose bus is not allowed (prevents empty inputs and orphan refs)
+        if not is_bus_allowed(bus):
+            continue
         id_out = row["ID"] if not should_comment_bus(bus) else f"//{row['ID']}"
 
         ws.write(rcur, 0, id_out)
@@ -508,9 +504,13 @@ def write_load_sheet(xw, input_path: Path) -> None:
         ws.write_number(rcur, 10, row["P1"], num0)
         ws.write_number(rcur, 11, row["Q1"], num0)
         rcur += 1
+    b4_e = rcur  # place 'End of' immediately after last written row (or header if none)
     ws.merge_range(b4_e, 0, b4_e, 1, "End of Single-Phase ZIP Load")
+    r = b4_e + 2
 
     # -------- Block 5: Two-Phase ZIP --------
+    # -------- Block 5: Two-Phase ZIP --------
+    b5_t, b5_h, b5_first = r, r + 1, r + 2
     ws.merge_range(b5_t, 0, b5_t, 1, "Two-Phase ZIP Load", bold)
     ws.write_url(b5_t, 2, "internal:'Load'!A1", link_fmt, "Go to Type List")
     ws.write_row(
@@ -527,6 +527,8 @@ def write_load_sheet(xw, input_path: Path) -> None:
         p1, p2 = row["PhasePair"]
         conn = (row["Conn"] or "").lower()
 
+        if not is_bus_allowed(bus):
+            continue
         id_out = row["ID"] if not should_comment_bus(bus) else f"//{row['ID']}"
 
         ws.write(rcur, 0, id_out); ws.write_number(rcur, 1, row["Status"], num0)
@@ -539,9 +541,13 @@ def write_load_sheet(xw, input_path: Path) -> None:
         ws.write_number(rcur,11, row["P1"], num0); ws.write_number(rcur,12, row["Q1"], num0)
         ws.write_number(rcur,13, row["P2"], num0); ws.write_number(rcur,14, row["Q2"], num0)
         rcur += 1
+    b5_e = rcur
     ws.merge_range(b5_e, 0, b5_e, 1, "End of Two-Phase ZIP Load")
+    r = b5_e + 2
 
     # -------- Block 6: Three-Phase ZIP --------
+    # -------- Block 6: Three-Phase ZIP --------
+    b6_t, b6_h, b6_first = r, r + 1, r + 2
     ws.merge_range(b6_t, 0, b6_t, 1, "Three-Phase ZIP Load", bold)
     ws.write_url(b6_t, 2, "internal:'Load'!A1", link_fmt, "Go to Type List")
     ws.write_row(
@@ -558,6 +564,8 @@ def write_load_sheet(xw, input_path: Path) -> None:
         vkv = bus_kvll.get(bus, bus_kvll["_default_"])
         conn = (row["Conn"] or "").lower()
 
+        if not is_bus_allowed(bus):
+            continue
         id_out = row["ID"] if not should_comment_bus(bus) else f"//{row['ID']}"
 
         ws.write(rcur, 0, id_out); ws.write_number(rcur, 1, row["Status"], num0)
@@ -571,4 +579,13 @@ def write_load_sheet(xw, input_path: Path) -> None:
         ws.write_number(rcur,14, row["P_B"], num0); ws.write_number(rcur,15, row["Q_B"], num0)
         ws.write_number(rcur,16, row["P_C"], num0); ws.write_number(rcur,17, row["Q_C"], num0)
         rcur += 1
+    b6_e = rcur
     ws.merge_range(b6_e, 0, b6_e, 1, "End of Three-Phase ZIP Load")
+
+    # Top links (write after blocks so ranges reflect actual end rows)
+    ws.write_url(1, 0, f"internal:'Load'!A{b1_h+1}:E{b1_e+1}", link_fmt, "PositiveSeqZload")
+    ws.write_url(1, 1, f"internal:'Load'!A{b6_h+1}:R{max(b6_h+1, b6_e+1)}", link_fmt, "ThreePhaseZIPLoad")
+    ws.write_url(2, 0, f"internal:'Load'!A{b2_h+1}:E{b2_e+1}", link_fmt, "PositiveSeqPload")
+    ws.write_url(3, 0, f"internal:'Load'!A{b3_h+1}:E{b3_e+1}", link_fmt, "PositiveSeqIload")
+    ws.write_url(4, 0, f"internal:'Load'!A{b4_h+1}:L{max(b4_h+1, b4_e+1)}", link_fmt, "SinglePhaseZIPLoad")
+    ws.write_url(5, 0, f"internal:'Load'!A{b5_h+1}:O{max(b5_h+1, b5_e+1)}", link_fmt, "TwoPhaseZIPLoad")

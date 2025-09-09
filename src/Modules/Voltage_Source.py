@@ -4,7 +4,7 @@ from pathlib import Path
 import xml.etree.ElementTree as ET
 from typing import List, Dict, Any, Optional
 import re
-from Modules.IslandFilter import should_comment_branch
+from Modules.IslandFilter import should_comment_branch, drop_mode_enabled
 from Modules.General import safe_name
 
 # --- helpers to see which buses are actually active on the Bus sheet ---
@@ -184,6 +184,9 @@ def _parse_voltage_sources(path: Path) -> tuple[list[dict], list[dict]]:
             # Comment out if the bus isn't active on the Bus sheet OR the island policy excludes this node
             island_exclude = should_comment_branch(node, node)  # reuse island filter for node-local devices
             comment = (not node_active) or island_exclude
+            # Drop if policy is remove and this row would be commented
+            if drop_mode_enabled() and comment:
+                continue
             id_out = f"//{sid}" if comment else sid
 
 

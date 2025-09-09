@@ -4,7 +4,7 @@ from pathlib import Path
 import xml.etree.ElementTree as ET
 from typing import List, Dict, Any
 from Modules.General import safe_name
-from Modules.IslandFilter import should_comment_bus
+from Modules.IslandFilter import should_comment_bus, should_drop_bus
 
 PHASE_SUFFIX = {"A": "_a", "B": "_b", "C": "_c"}
 PHASES = ("A", "B", "C")
@@ -80,6 +80,9 @@ def _parse_shunts(txt_path: Path):
 
         # Build ID and maybe comment it out per island policy
         cid = _cap_id(from_bus, devnum)
+        if should_drop_bus(from_bus):
+            # skip this device entirely in remove mode
+            continue
         cid_out = cid if not should_comment_bus(from_bus) else f"//{cid}"
 
         if phase in PHASES:

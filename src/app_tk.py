@@ -1,4 +1,4 @@
-# src/app_tk.py  — Premium UI + Island workflow (click row to activate)
+﻿# src/app_tk.py  — Premium UI + Island workflow (click row to activate)
 from __future__ import annotations
 import os, sys, json, threading, queue, traceback, platform, subprocess
 from pathlib import Path
@@ -319,7 +319,10 @@ def ensure_brand_assets() -> None:
         for (px,py) in nodes:
             draw.ellipse((px-r,py-r,px+r,py+r), fill=doc_border)
 
-        out = img.resize((256, 256), Image.LANCZOS)
+        # Use a resampling method compatible across Pillow versions (no direct BICUBIC reference)
+        _Resampling = getattr(Image, "Resampling", None)
+        _filter = getattr(_Resampling, "LANCZOS", getattr(Image, "LANCZOS", 1))
+        out = img.resize((256, 256), _filter)
         out.save(path)
         return out
 
@@ -398,7 +401,7 @@ class App(ctk.CTk):
         self.configure(fg_color=self.COL["BG"])
 
         # state
-        self.events: "queue.Queue[tuple[str, object]]" = queue.Queue()
+        self.events: "queue.Queue[tuple[str, Any]]" = queue.Queue()
         self.in_path = tk.StringVar(value=conf.get("last_input", ""))
         self.out_path = tk.StringVar(value=conf.get("last_output", str(Path.cwd() / "CYME_Extract.xlsx")))
         self.sheet_vars: dict[str, tk.BooleanVar] = {name: tk.BooleanVar(value=DEFAULT_SHEETS[name]) for name in DEFAULT_SHEETS}
@@ -448,8 +451,8 @@ class App(ctk.CTk):
         self.sun_icon = None
         self.moon_icon = None
         try:
-            from PIL import Image, ImageDraw, ImageTk  # type: ignore
-            def sun_img(color: str) -> tk.PhotoImage:
+            from PIL import Image, ImageDraw  # type: ignore
+            def sun_img(color: str) -> ctk.CTkImage:
                 W = 18
                 im = Image.new("RGBA", (W, W), (0,0,0,0))
                 d = ImageDraw.Draw(im)
@@ -459,14 +462,14 @@ class App(ctk.CTk):
                 for a in range(0,360,45):
                     # tiny rectangles as rays
                     d.pieslice((1,1,17,17), a-2, a+2, fill=color)
-                return ImageTk.PhotoImage(im)
-            def moon_img(color: str) -> tk.PhotoImage:
+                return ctk.CTkImage(light_image=im, size=(W, W))
+            def moon_img(color: str) -> ctk.CTkImage:
                 W = 18
                 im = Image.new("RGBA", (W, W), (0,0,0,0))
                 d = ImageDraw.Draw(im)
                 d.ellipse((3,3,15,15), fill=color)
                 d.ellipse((7,3,17,15), fill=(0,0,0,0))
-                return ImageTk.PhotoImage(im)
+                return ctk.CTkImage(light_image=im, size=(W, W))
             self.sun_icon = sun_img(self.COL["TEXT"])
             self.moon_icon = moon_img(self.COL["TEXT"])
         except Exception:
@@ -476,7 +479,7 @@ class App(ctk.CTk):
         row.pack(side="right")
         self.sun_lbl = ctk.CTkLabel(row, text="", image=self.sun_icon, text_color=self.COL["TEXT"]) if self.sun_icon else ctk.CTkLabel(row, text="☀", text_color=self.COL["TEXT"]) 
         self.sun_lbl.pack(side="left", padx=(0,6))
-        self.theme_bool = tk.IntVar(value=1 if self.theme_mode == "dark" else 0)
+        self.theme_bool = tk.IntVar(value=1 if str(ctk.get_appearance_mode()).lower() == "dark" else 0)
         self.theme_switch = ctk.CTkSwitch(row, text="", command=self._on_theme_switch,
                                           variable=self.theme_bool, onvalue=1, offvalue=0,
                                           width=52, height=28, progress_color=self.COL["ACCENT"])
@@ -647,7 +650,16 @@ class App(ctk.CTk):
         self.btn_island_reset = ctk.CTkButton(right, text="Reset", command=self._reset_active_island,
                                               fg_color=self.COL["ACCENT_SOFT"], hover_color=self.COL["ACCENT_SOFT_HOVER"], text_color=self.COL["ACCENT"],
                                               font=(self.UI_FONT, self.UI_SIZE), height=36, corner_radius=12)
-        self.btn_island_reset.pack(side="left")
+        self.btn_island_reset.pack(side="left", padx=(0, 8))
+
+        # Unused objects policy: Comment vs Remove
+        ctk.CTkLabel(right, text="Unused objects:", font=(self.UI_FONT, self.UI_SIZE), text_color=self.COL["TEXT"]).pack(side="left", padx=(8, 6))
+        self.prune_mode = tk.StringVar(value="Comment")
+        self.prune_menu = ctk.CTkOptionMenu(right, values=["Comment", "Remove"], variable=self.prune_mode,
+                                            fg_color=self.COL["ACCENT_SOFT"], button_color=self.COL["ACCENT"],
+                                            button_hover_color=self.COL["ACCENT_HOVER"], text_color=self.COL["TEXT"],
+                                            font=(self.UI_FONT, self.UI_SIZE))
+        self.prune_menu.pack(side="left")
 
         # adjustable split: table over (bus list + summary)
         self.island_outer = ctk.CTkFrame(parent, fg_color=self.COL["CARD"], corner_radius=16)
@@ -742,17 +754,17 @@ class App(ctk.CTk):
                     self.moon_lbl.configure(text_color=self.COL["TEXT"]) 
                     # refresh icons to match text color
                     try:
-                        from PIL import Image, ImageDraw, ImageTk  # type: ignore
+                        from PIL import Image, ImageDraw  # type: ignore
                         def _sun(color: str):
                             W=18; im=Image.new("RGBA",(W,W),(0,0,0,0)); d=ImageDraw.Draw(im)
                             d.ellipse((4,4,14,14), fill=color)
                             for a in range(0,360,45):
                                 d.pieslice((1,1,17,17), a-2, a+2, fill=color)
-                            return ImageTk.PhotoImage(im)
+                            return ctk.CTkImage(light_image=im, size=(W, W))
                         def _moon(color: str):
                             W=18; im=Image.new("RGBA",(W,W),(0,0,0,0)); d=ImageDraw.Draw(im)
                             d.ellipse((3,3,15,15), fill=color); d.ellipse((7,3,17,15), fill=(0,0,0,0))
-                            return ImageTk.PhotoImage(im)
+                            return ctk.CTkImage(light_image=im, size=(W, W))
                         self.sun_icon = _sun(self.COL["TEXT"])
                         self.moon_icon = _moon(self.COL["TEXT"])
                         self.sun_lbl.configure(image=self.sun_icon)
@@ -761,28 +773,17 @@ class App(ctk.CTk):
                         pass
                 except Exception:
                     pass
-            # brand holder + image bg
-            if hasattr(self, "brand_holder"):
-                try:
-                    self.brand_holder.configure(bg=self.COL["BG"])
-                    for ch in self.brand_holder.winfo_children():
-                        try:
-                            ch.configure(bg=self.COL["BG"])
-                        except Exception:
-                            pass
-                    # swap brand image for current mode
-                    try:
-                        logo_png = resource_path("icons", f"cyme_logo_{mode}.png")
-                        if not logo_png.exists():
-                            logo_png = resource_path("icons", "cyme_logo_light.png")
-                        if logo_png.exists() and hasattr(self, "brand_img_label"):
-                            new_img = tk.PhotoImage(file=str(logo_png))
-                            self._brand_img_ref = new_img
-                            self.brand_img_label.configure(image=new_img)
-                    except Exception:
-                        pass
-                except Exception:
-                    pass
+            # brand image swap to match theme (avoid unknown attributes)
+            try:
+                logo_png = resource_path("icons", f"cyme_logo_{mode}.png")
+                if not logo_png.exists():
+                    logo_png = resource_path("icons", "cyme_logo_light.png")
+                if logo_png.exists() and hasattr(self, "brand_img_label"):
+                    new_img = ctk.CTkImage(light_image=Image.open(str(logo_png)), size=(28, 28))  # type: ignore[name-defined]
+                    self.brand_img = new_img  # keep reference
+                    self.brand_img_label.configure(image=new_img)
+            except Exception:
+                pass
         except Exception:
             pass
 
@@ -808,26 +809,31 @@ class App(ctk.CTk):
                     pass
 
         # Buttons in row1/row2 (by discovery to avoid strict references)
+        # Buttons in row1/row2 (by discovery to avoid strict references)
         try:
             # row1: label, entry, [browse], [open folder]
-            for w in getattr(self, "run_row1", None).winfo_children():
-                if isinstance(w, ctk.CTkButton):
-                    txt = (w.cget("text") or "").lower()
-                    if "browse" in txt:
-                        w.configure(fg_color=self.COL["ACCENT"], hover_color=self.COL["ACCENT_HOVER"], text_color=None)
-                    else:
-                        w.configure(fg_color=self.COL["ACCENT_SOFT"], hover_color=self.COL["ACCENT_SOFT_HOVER"], text_color=self.COL["ACCENT"])
+            row1 = getattr(self, "run_row1", None)
+            if row1 is not None:
+                for w in row1.winfo_children():
+                    if isinstance(w, ctk.CTkButton):
+                        txt = (w.cget("text") or "").lower()
+                        if "browse" in txt:
+                            w.configure(fg_color=self.COL["ACCENT"], hover_color=self.COL["ACCENT_HOVER"], text_color=None)
+                        else:
+                            w.configure(fg_color=self.COL["ACCENT_SOFT"], hover_color=self.COL["ACCENT_SOFT_HOVER"], text_color=self.COL["ACCENT"])
         except Exception:
             pass
         try:
             # row2: label, entry, [save as], [open folder]
-            for w in getattr(self, "run_row2", None).winfo_children():
-                if isinstance(w, ctk.CTkButton):
-                    txt = (w.cget("text") or "").lower()
-                    if "save" in txt:
-                        w.configure(fg_color=self.COL["ACCENT"], hover_color=self.COL["ACCENT_HOVER"], text_color=None)
-                    else:
-                        w.configure(fg_color=self.COL["ACCENT_SOFT"], hover_color=self.COL["ACCENT_SOFT_HOVER"], text_color=self.COL["ACCENT"])
+            row2 = getattr(self, "run_row2", None)
+            if row2 is not None:
+                for w in row2.winfo_children():
+                    if isinstance(w, ctk.CTkButton):
+                        txt = (w.cget("text") or "").lower()
+                        if "save" in txt:
+                            w.configure(fg_color=self.COL["ACCENT"], hover_color=self.COL["ACCENT_HOVER"], text_color=None)
+                        else:
+                            w.configure(fg_color=self.COL["ACCENT_SOFT"], hover_color=self.COL["ACCENT_SOFT_HOVER"], text_color=self.COL["ACCENT"])
         except Exception:
             pass
 
@@ -837,7 +843,6 @@ class App(ctk.CTk):
             self.quit_btn.configure(fg_color=self.COL["DANGER"], hover_color=self.COL["DANGER_HOVER"])
         except Exception:
             pass
-
         # Entries styling (file selections)
         try:
             self.in_entry.configure(fg_color=self.COL["INPUT_BG"], border_color=self.COL["INPUT_BORDER"], text_color=self.COL["INPUT_FG"]) 
@@ -950,36 +955,36 @@ class App(ctk.CTk):
 
     def _run_pipeline_worker(self, in_path: Path, out_path: Path, sheets: dict[str, bool]):
         try:
-            steps: list[tuple[str, callable]] = []
-            if sheets["General"]:        steps.append(("General",        write_general_sheet))
-            if sheets["Pins"]:           steps.append(("Pins",           write_pins_sheet))
-            if sheets["Bus"]:            steps.append(("Bus",            write_bus_sheet))
-            if sheets["Voltage Source"]: steps.append(("Voltage Source", write_voltage_source_sheet))
-            if sheets["Load"]:           steps.append(("Load",           write_load_sheet))
-            if sheets["Line"]:           steps.append(("Line",           write_line_sheet))
-            if sheets["Transformer"]:    steps.append(("Transformer",    write_transformer_sheet))
-            if sheets["Switch"]:         steps.append(("Switch",         write_switch_sheet))
-            if sheets["Shunt"]:          steps.append(("Shunt",          write_shunt_sheet))
+            steps: list[tuple[str, Callable[[Any, Path], None]]] = []
+            if sheets.get("General", False):        steps.append(("General",        write_general_sheet))
+            if sheets.get("Pins", False):           steps.append(("Pins",           write_pins_sheet))
+            if sheets.get("Bus", False):            steps.append(("Bus",            write_bus_sheet))
+            if sheets.get("Voltage Source", False): steps.append(("Voltage Source", write_voltage_source_sheet))
+            if sheets.get("Load", False):           steps.append(("Load",           write_load_sheet))
+            if sheets.get("Line", False):           steps.append(("Line",           write_line_sheet))
+            if sheets.get("Transformer", False):    steps.append(("Transformer",    write_transformer_sheet))
+            if sheets.get("Switch", False):         steps.append(("Switch",         write_switch_sheet))
+            if sheets.get("Shunt", False):          steps.append(("Shunt",          write_shunt_sheet))
 
             total = len(steps) + 1
             cur = 0
 
             # Analyze first
-            self._emit("log", f"[1/{total}] Analyzing islands …")
+            self._emit("log", f"[1/{total}] Analyzing islands �")
             analyze_and_set_island_context(in_path, per_island_limit=50)
             # Decide export scope now (UI click does NOT prune; we prune only at run time)
             if self.active_island_id is not None:
-                self._emit("log", f" → Exporting ONLY island {self.active_island_id}")
+                self._emit("log", f" ? Exporting ONLY island {self.active_island_id}")
                 _filter_context_to_island(self, self.active_island_id)
             else:
-                self._emit("log", " → No active island chosen: keeping all islands WITH voltage sources; pruning islands without sources")
+                self._emit("log", " ? No active island chosen: keeping all islands WITH voltage sources; pruning islands without sources")
                 _keep_sourceful_islands_context(self, in_path)
 
             # If user already chose an active island earlier, re-apply it after analysis
             if self.active_island_id is not None:
                 try:
                     self._apply_selected_island_context(self.active_island_id)
-                    self._emit("log", f" → Active island preserved: {self.active_island_id}")
+                    self._emit("log", f" ? Active island preserved: {self.active_island_id}")
                 except Exception as e:
                     self._emit("log", f" ! Failed to re-apply active island: {e}")
 
@@ -989,17 +994,35 @@ class App(ctk.CTk):
             self._emit("progress", int(cur / total * 100))
 
             # Write workbook
-            self._emit("log", f"[2/{total}] Writing workbook → {out_path}")
+            self._emit("log", f"[2/{total}] Writing workbook ? {out_path}")
             out_path.parent.mkdir(parents=True, exist_ok=True)
-            with pd.ExcelWriter(out_path, engine="xlsxwriter") as xw:
+            opened_path = out_path
+            try:
+                writer = pd.ExcelWriter(out_path, engine="xlsxwriter")
+            except PermissionError:
+                from datetime import datetime
+                alt = out_path.with_name(f"{out_path.stem}__{datetime.now().strftime('%Y%m%d_%H%M%S')}{out_path.suffix}")
+                opened_path = alt
+                self._emit("log", f" ! Output file locked. Writing to: {alt}")
+                writer = pd.ExcelWriter(alt, engine="xlsxwriter")
+            with writer as xw:
+                # Apply prune policy to the island context (comment vs remove)
+                try:
+                    from Modules.General import get_island_context, set_island_context  # lazy import
+                    ctx = get_island_context() or {}
+                    mode = (self.prune_mode.get() if hasattr(self, 'prune_mode') else 'Comment') or 'Comment'
+                    ctx["prune_mode"] = "remove" if str(mode).strip().lower().startswith("remove") else "comment"
+                    set_island_context(ctx)
+                except Exception:
+                    pass
                 for name, fn in steps:
                     self._emit("log", f"  - {name}")
                     fn(xw, in_path)
                     cur += 1
                     self._emit("progress", int(cur / total * 100))
 
-            self._emit("log", f"✔ Done. Wrote: {out_path}")
-            self._emit("done", str(out_path))
+            self._emit("log", f"Done. Wrote: {opened_path}")
+            self._emit("done", str(opened_path))
         except Exception as e:
             self._emit("error", "".join(traceback.format_exception(e)))
 
@@ -1023,6 +1046,8 @@ class App(ctk.CTk):
             finally:
                 self._set_busy(False)
         threading.Thread(target=_worker, daemon=True).start()
+
+            # removed stray duplicate error emission
 
     def _on_island_click(self, event):
         if self._handling_island_click:
@@ -1100,7 +1125,7 @@ class App(ctk.CTk):
         set_island_context(new_ctx)
 
     # ----- thread → UI bridge -------------------------------------------------
-    def _emit(self, kind: str, payload: object):
+    def _emit(self, kind: str, payload: Any):
         self.events.put((kind, payload))
 
     def _poll_events(self):
@@ -1110,7 +1135,11 @@ class App(ctk.CTk):
                 if kind == "log":
                     self._append_log(str(payload))
                 elif kind == "progress":
-                    self._set_progress(int(payload))
+                    # payload is expected int, but accept Any and coerce safely
+                    try:
+                        self._set_progress(int(payload))
+                    except Exception:
+                        self._set_progress(0)
                 elif kind == "done":
                     self._set_busy(False); messagebox.showinfo(APP_NAME, f"Export complete:\n{payload}")
                 elif kind == "error":
@@ -1237,3 +1266,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+

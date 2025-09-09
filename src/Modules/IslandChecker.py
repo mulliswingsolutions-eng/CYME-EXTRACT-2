@@ -43,10 +43,31 @@ def _dev_is_closed(dev: ET.Element) -> bool:
 
 
 def _section_has_closed_connection(sec: ET.Element) -> bool:
+    """
+    Decide if the section provides a closed conducting path between From/To.
+
+    Important nuance for CYME sections that include both a line and a switch:
+    - An OPEN switch in the section should OPEN the whole section (no connection),
+      even if a line-like device is 'in service'. In practice, devices in a
+      section are in series for topology purposes.
+    - If there is a switch-only tie section, a CLOSED switch should connect.
+
+    Therefore:
+      - If ANY switch-like device is present and OPEN -> section is OPEN.
+      - Else, if ANY device (switch/line/transformer) is CLOSED -> section is CLOSED.
+      - Else -> OPEN.
+    """
     devs = sec.find("./Devices")
     if devs is None:
         return False
 
+    # If any switch-like device is OPEN, the section is open
+    for tag in SWITCH_LIKE:
+        for d in devs.findall(tag):
+            if not _dev_is_closed(d):
+                return False
+
+    # Otherwise, if any device that can conduct is CLOSED, the section is closed
     for tag in TRANSFORMERS:
         for d in devs.findall(tag):
             if _dev_is_closed(d):
@@ -65,12 +86,30 @@ def _section_has_closed_connection(sec: ET.Element) -> bool:
     return False
 
 
-def _sources_nodes(root: ET.Element) -> Set[str]:
+def _vs_page_source_nodes(root: ET.Element) -> Set[str]:
+    """
+    Return the set of buses that appear as Voltage Sources on the VS page:
+    - Only Topo blocks where NetworkType == 'Substation'
+    - EquivalentMode != '1'
+    - And the Source has an EquivalentSource model (same criteria Bus/Voltage_Source use)
+    """
     out: Set[str] = set()
-    for src in root.findall(".//Sources/Source"):
-        nid = safe_name(src.findtext("SourceNodeID"))
-        if nid:
-            out.add(nid)
+    for topo in root.findall(".//Topo"):
+        ntype = (topo.findtext("NetworkType") or "").strip().lower()
+        eq_mode = (topo.findtext("EquivalentMode") or "").strip()
+        if ntype != "substation" or eq_mode == "1":
+            continue
+        srcs = topo.find("./Sources")
+        if srcs is None:
+            continue
+        for src in srcs.findall("./Source"):
+            nid = safe_name(src.findtext("SourceNodeID"))
+            # Must have an EquivalentSource block to show on VS page
+            eq = src.find("./EquivalentSourceModels/EquivalentSourceModel/EquivalentSource")
+            if nid and eq is not None:
+                out.add(nid)
+    # Fallback: if no Topo/Substation sources were found, keep behavior aligned
+    # with the VS sheet and return empty set rather than all .//Sources/Source
     return out
 
 
@@ -151,7 +190,7 @@ def check_islands(xml_path: Path) -> Dict:
     adj, e_closed, e_ignored = _build_graph(root)
     comps = _components(adj)
 
-    source_nodes = _sources_nodes(root)
+    source_nodes = _vs_page_source_nodes(root)
     shunt_nodes = _shunt_buses(root)
 
     out_list = []
@@ -224,13 +263,9 @@ def build_island_context(xml_path: Path) -> dict:
             bus_to_island[b] = idx
         has_source_by_island[idx] = bool(comp["has_source"])
 
-    # Source nodes (prefer slack there)
+    # Source nodes used for slack selection (VS page sources only)
     root = _read_xml(xml_path)
-    source_nodes = set()
-    for src in root.findall(".//Sources/Source"):
-        nid = safe_name(src.findtext("SourceNodeID"))
-        if nid:
-            source_nodes.add(nid)
+    source_nodes = _vs_page_source_nodes(root)
 
     slack_per_island: Dict[int, str] = {}
     for idx, bases in islands.items():
