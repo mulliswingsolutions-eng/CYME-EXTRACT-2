@@ -20,7 +20,7 @@ def _f(x: Optional[str]) -> Optional[float]:
         xs = x.strip()
         if xs == "":
             return None
-        # handle "330deg" / "30°" patterns if ever needed
+        # handle "330deg" / "30Â°" patterns if ever needed
         if xs.lower().endswith("deg"):
             xs = xs[:-3]
         return float(xs)
@@ -71,7 +71,7 @@ def _compute_x_rw(z_percent: Optional[float],
                   xr_ratio: Optional[float]) -> Tuple[Optional[float], Optional[float], Optional[float]]:
     """
     From PositiveSequenceImpedancePercent (Z%) and XRRatio, compute:
-      X (pu), RW1 (pu), RW2 (pu).  If inputs missing/invalid → all None.
+      X (pu), RW1 (pu), RW2 (pu).  If inputs missing/invalid â†’ all None.
     """
     if z_percent is None or xr_ratio is None:
         return None, None, None
@@ -109,6 +109,30 @@ def _bounds_from_ntaps(ntaps: Optional[float]) -> tuple[Optional[int], Optional[
         return None, None
     half = n // 2
     return -half, half
+
+
+# ------------------------
+# Read RegulatorDB (for modeling regulators as 1:1 transformers)
+# ------------------------
+def _read_regulator_db(root: ET.Element) -> Dict[str, Dict[str, Any]]:
+    out: Dict[str, Dict[str, Any]] = {}
+    for rdb in root.findall(".//RegulatorDB"):
+        eid = _t(rdb.findtext("EquipmentID"))
+        if not eid:
+            continue
+        rated_kvln = _f(rdb.findtext("RatedKVLN"))
+        rated_kva  = _f(rdb.findtext("RatedKVA")) or _f(rdb.findtext("FirstRatedKVA"))
+        maxreg = _f(rdb.findtext("MaximumBoost"))
+        minreg = _f(rdb.findtext("MaximumBuck"))
+        ntaps  = _f(rdb.findtext("NumberOfTaps"))
+        out[eid] = {
+            "kvln": rated_kvln,
+            "kva": rated_kva,
+            "ntaps": ntaps,
+            "minreg": minreg,
+            "maxreg": maxreg,
+        }
+    return out
 
 
 # ------------------------
@@ -170,13 +194,13 @@ def _read_transformer_db(root: ET.Element) -> Dict[str, Dict[str, Any]]:
 
 
 # ------------------------
-# Parse sections → rows
+# Parse sections â†’ rows
 # ------------------------
 def _ltc_fields(xf: ET.Element) -> Dict[str, Optional[float]]:
     """
     Pull tap/range values. Convert *_TapSettingPercent fields from % to pu.
     """
-    # --- Tap settings by winding (percent → per-unit) ---
+    # --- Tap settings by winding (percent â†’ per-unit) ---
     tap1_pct = _f(xf.findtext("PrimaryTapSettingPercent"))
     tap2_pct = _f(xf.findtext("SecondaryTapSettingPercent"))
     tap3_pct = _f(xf.findtext("TertiaryTapSettingPercent"))
@@ -208,13 +232,47 @@ def _ltc_fields(xf: ET.Element) -> Dict[str, Optional[float]]:
 def _parse_multiphase_2w_rows(input_path: Path) -> List[List[Any]]:
     """
     Parse <Section><Devices><Transformer> entries and build Multiphase 2W rows.
-    No defaults are injected; missing data → empty cells.
+    No defaults are injected; missing data â†’ empty cells.
 
     NEW: If either endpoint bus is NOT active on the Bus sheet, we prefix the
          transformer ID with '//' so the row is commented out (avoids dangling devices).
     """
     root = ET.fromstring(input_path.read_text(encoding="utf-8", errors="ignore"))
+    # Build island -> source primary per-unit (LN) map from EquivalentSource operating voltage
+    from Modules.General import get_island_context
+    ctx = get_island_context() or {}
+    bus_to_island: Dict[str, int] = dict(ctx.get("bus_to_island", {}))
+    # phase-agnostic magnitude per island (use OperatingVoltage1/ KVLL/sqrt(3))
+    import math
+    island_vpri_pu: Dict[int, float] = {}
+    for topo in root.findall(".//Topo"):
+        ntype = (topo.findtext("NetworkType") or "").strip().lower()
+        eq_mode = (topo.findtext("EquivalentMode") or "").strip()
+        if ntype != "substation" or eq_mode == "1":
+            continue
+        srcs_parent = topo.find("./Sources")
+        if srcs_parent is None:
+            continue
+        for src in srcs_parent.findall("./Source"):
+            node_raw = _t(src.findtext("SourceNodeID"))
+            node = safe_name(node_raw)
+            if not node:
+                continue
+            eq = src.find("./EquivalentSourceModels/EquivalentSourceModel/EquivalentSource")
+            if eq is None:
+                continue
+            kvll = _f(eq.findtext("KVLL"))
+            v1 = _f(eq.findtext("OperatingVoltage1"))
+            if kvll is None or v1 is None or kvll == 0:
+                continue
+            isl = bus_to_island.get(node)
+            if isl is None:
+                continue
+            vbase_ln = float(kvll) / math.sqrt(3.0)
+            island_vpri_pu[isl] = float(v1) / vbase_ln
+
     tdb = _read_transformer_db(root)
+    rdb = _read_regulator_db(root)
 
     # Active bus bases from Bus sheet
     active_bases = _active_bus_bases_from_bus_sheet(input_path)
@@ -223,7 +281,8 @@ def _parse_multiphase_2w_rows(input_path: Path) -> List[List[Any]]:
 
     for sec in root.findall(".//Section"):
         xf = sec.find(".//Devices/Transformer")
-        if xf is None:
+        reg = sec.find(".//Devices/Regulator")
+        if xf is None and reg is None:
             continue
 
         # raw values
@@ -235,6 +294,44 @@ def _parse_multiphase_2w_rows(input_path: Path) -> List[List[Any]]:
         from_bus = safe_name(from_bus_raw)
         to_bus   = safe_name(to_bus_raw)
 
+        # Regulator-only section: export as 1:1 transformer and continue
+        if xf is None and reg is not None:
+            status_text_r = _t(reg.findtext("ConnectionStatus") or "Connected").lower()
+            status_r = 1 if status_text_r == "connected" else 0
+            dev_id_r = _t(reg.findtext("DeviceID"))
+            conn_code_r = _t(reg.findtext("ConnectionConfiguration"))
+            conn_pr, conn_sr = _decode_conn(conn_code_r)
+
+            info_r = rdb.get(dev_id_r, {})
+            kvln = info_r.get("kvln")
+            kva_r = info_r.get("kva")
+            kvp_r = kvln
+            kvs_r = kvln
+
+            b1a, b1b, b1c = _bus_labels(from_bus, phase)
+            b2a, b2b, b2c = _bus_labels(to_bus, phase)
+
+            rid_r = safe_name(f"VR1_{from_bus}_{to_bus}")
+            from_active = from_bus in active_bases
+            to_active   = to_bus in active_bases
+            island_exclude = should_comment_branch(from_bus, to_bus)
+            comment_r = (not from_active) or (not to_active) or island_exclude
+            if not (drop_mode_enabled() and (should_drop_branch(from_bus, to_bus) or (not from_active) or (not to_active))):
+                rid_out_r = f"//{rid_r}" if comment_r else rid_r
+                rows.append([
+                    rid_out_r, status_r, _phase_count(phase),
+                    b1a, b1b, b1c, kvp_r, kva_r, conn_pr,
+                    b2a, b2b, b2c, kvs_r, kva_r, conn_sr,
+                    None, None, None,
+                    None, None,
+                    None, None,
+                    None, None, None
+                ])
+            continue
+
+        # If transformer element missing, skip; Pylance narrowing
+        if xf is None:
+            continue
         status_text = _t(xf.findtext("ConnectionStatus") or "Connected").lower()
         status = 1 if status_text == "connected" else 0
 
@@ -269,7 +366,52 @@ def _parse_multiphase_2w_rows(input_path: Path) -> List[List[Any]]:
         if taps["max_rng"] is None:
             taps["max_rng"] = info.get("maxreg")
 
-        # Bus labels (respect the stated phases) — bus names already sanitized
+        # Compute initial LTC integer tap (applies to all phases equally)
+        chosen_n: Optional[int] = None
+        try:
+            ltc_blk = xf.find("./LTCSettings")
+            setpoint = _f(ltc_blk.findtext("SetPoint")) if ltc_blk is not None else None
+            tap_loc = _t(ltc_blk.findtext("TapLocation") if ltc_blk is not None else "")
+            low = taps.get("low")
+            high = taps.get("high")
+            # Determine island from either endpoint (prefer from_bus)
+            isl_id = bus_to_island.get(from_bus) or bus_to_island.get(to_bus)
+            vpri_pu = island_vpri_pu.get(isl_id) if isl_id is not None else None
+
+            # step size from max range and highest tap count
+            max_rng = taps.get("max_rng") or taps.get("min_rng")
+            if (setpoint is not None) and (low is not None) and (high is not None) and (max_rng is not None) and vpri_pu:
+                # Only Voltage120V supported for now
+                vset_pu = float(setpoint) / 120.0
+                # Narrow types for static analysis; ensure numeric
+                if not isinstance(low, (int, float)) or not isinstance(high, (int, float)):
+                    raise ValueError("Invalid tap bounds")
+                low_i = int(round(low))
+                high_i = int(round(high))
+                steps = max(abs(high_i), abs(low_i))
+                if steps > 0:
+                    step = (float(max_rng) / 100.0) / float(steps)
+                    if step > 0:
+                        # Bias toward the higher resulting secondary voltage relative to setpoint
+                        # Secondary control: choose ceil(n_est) so Vsec >= Vset if possible
+                        # Primary control: increasing n lowers Vsec; choose floor(n_est) for Vsec >= Vset
+                        import math
+                        def clamp(nv: int) -> int:
+                            return max(low_i, min(high_i, int(nv)))
+                        sec_ctrl = not tap_loc.lower().startswith("primary")
+                        if sec_ctrl:
+                            target_ratio = (vset_pu / float(vpri_pu))
+                            n_est = ((target_ratio - 1.0) / step)
+                            n_bias = math.ceil(n_est)
+                        else:
+                            target_ratio = (1.0 / (vset_pu / float(vpri_pu)))
+                            n_est = ((target_ratio - 1.0) / step)
+                            n_bias = math.floor(n_est)
+                        chosen_n = clamp(int(n_bias))
+        except Exception:
+            pass
+
+        # Bus labels (respect the stated phases) â€” bus names already sanitized
         b1a, b1b, b1c = _bus_labels(from_bus, phase)
         b2a, b2b, b2c = _bus_labels(to_bus, phase)
 
@@ -286,15 +428,62 @@ def _parse_multiphase_2w_rows(input_path: Path) -> List[List[Any]]:
             continue
         rid_out = f"//{rid}" if comment else rid
 
+        # Final Tap values:
+        # LTC controls all three phases together -> set Tap1/2/3 = n
+        if chosen_n is not None:
+            tap1_out = chosen_n
+            tap2_out = chosen_n
+            tap3_out = chosen_n
+        else:
+            tap1_out = taps["tap1"]
+            tap2_out = taps["tap2"]
+            tap3_out = taps["tap3"]
+
         rows.append([
             rid_out, status, _phase_count(phase),
             b1a, b1b, b1c, kvp, kva, conn_p,
             b2a, b2b, b2c, kvs, kva, conn_s,
-            taps["tap1"], taps["tap2"], taps["tap3"],
+            tap1_out, tap2_out, tap3_out,
             taps["low"], taps["high"],
             taps["min_rng"], taps["max_rng"],
             x_pu, rw1, rw2
         ])
+
+        # --- Regulators modeled as 1:1 transformers ---
+        if reg is not None:
+            status_text_r = _t(reg.findtext("ConnectionStatus") or "Connected").lower()
+            status_r = 1 if status_text_r == "connected" else 0
+            dev_id_r = _t(reg.findtext("DeviceID"))
+            conn_code_r = _t(reg.findtext("ConnectionConfiguration"))
+            conn_pr, conn_sr = _decode_conn(conn_code_r)
+
+            info_r = rdb.get(dev_id_r, {})
+            kvln = info_r.get("kvln")
+            kva_r = info_r.get("kva")
+            kvp_r = kvln
+            kvs_r = kvln
+
+            b1a, b1b, b1c = _bus_labels(from_bus, phase)
+            b2a, b2b, b2c = _bus_labels(to_bus, phase)
+
+            rid_r = safe_name(f"VR1_{from_bus}_{to_bus}")
+            from_active = from_bus in active_bases
+            to_active   = to_bus in active_bases
+            island_exclude = should_comment_branch(from_bus, to_bus)
+            comment_r = (not from_active) or (not to_active) or island_exclude
+            if drop_mode_enabled() and (should_drop_branch(from_bus, to_bus) or (not from_active) or (not to_active)):
+                pass
+            else:
+                rid_out_r = f"//{rid_r}" if comment_r else rid_r
+                rows.append([
+                    rid_out_r, status_r, _phase_count(phase),
+                    b1a, b1b, b1c, kvp_r, kva_r, conn_pr,
+                    b2a, b2b, b2c, kvs_r, kva_r, conn_sr,
+                    None, None, None,
+                    None, None,
+                    None, None,
+                    None, None, None
+                ])
 
     return rows
 

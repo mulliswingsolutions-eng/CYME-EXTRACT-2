@@ -81,9 +81,13 @@ def _pick_seq_impedances(eq: ET.Element | None, src: ET.Element) -> Optional[Dic
     r0 = pick("FirstLevelR0", "SecondLevelR0")
     x0 = pick("FirstLevelX0", "SecondLevelX0")
 
-    if None in (r1, x1, r0, x0):
+    if r1 is None or x1 is None or r0 is None or x0 is None:
         return None
-    return {"R1": float(r1), "X1": float(x1), "R0": float(r0), "X0": float(x0)}
+    r1f: float = r1
+    x1f: float = x1
+    r0f: float = r0
+    x0f: float = x0
+    return {"R1": r1f, "X1": x1f, "R0": r0f, "X0": x0f}
 
 
 def _pick_sc_capacities(eq: ET.Element | None, src: ET.Element) -> Optional[Dict[str, float]]:
@@ -95,12 +99,12 @@ def _pick_sc_capacities(eq: ET.Element | None, src: ET.Element) -> Optional[Dict
             _f(eq.findtext("NominalCapacity2MVA")),
         ])
     vals.append(_f(src.findtext("ShortCircuitMVA")))
-    found = [v for v in vals if v and v > 0]
-    if not found:
+    found_vals: List[float] = [float(v) for v in vals if v is not None and v > 0]
+    if not found_vals:
         return None
-    if len(found) >= 2:
-        return {"SC1ph": float(found[0]), "SC3ph": float(found[1])}
-    v = float(found[0])
+    if len(found_vals) >= 2:
+        return {"SC1ph": found_vals[0], "SC3ph": found_vals[1]}
+    v = found_vals[0]
     return {"SC1ph": v, "SC3ph": v}
 
 
@@ -180,6 +184,13 @@ def _parse_voltage_sources(path: Path) -> tuple[list[dict], list[dict]]:
             if angle_a is None:
                 angle_a = 0.0
 
+            # Use operating LL kV rather than nominal KVLL for output
+            import math
+            vln_kv = _f(eq.findtext("OperatingVoltage1")) if eq is not None else None
+            kvll_oper = None
+            if vln_kv is not None:
+                kvll_oper = float(vln_kv) * math.sqrt(3.0)
+
             sid = _get_source_id(src, node, model_index=idx if len(models) > 1 else None)
             # Comment out if the bus isn't active on the Bus sheet OR the island policy excludes this node
             island_exclude = should_comment_branch(node, node)  # reuse island filter for node-local devices
@@ -198,7 +209,7 @@ def _parse_voltage_sources(path: Path) -> tuple[list[dict], list[dict]]:
                         "Bus1": f"{node}_a",
                         "Bus2": f"{node}_b",
                         "Bus3": f"{node}_c",
-                        "kV": kV,
+                        "kV": float(kvll_oper) if kvll_oper is not None else kV,
                         "Angle_a": float(angle_a),
                         "R1": seq["R1"], "X1": seq["X1"], "R0": seq["R0"], "X0": seq["X0"],
                     }
@@ -217,7 +228,7 @@ def _parse_voltage_sources(path: Path) -> tuple[list[dict], list[dict]]:
                         "Bus1": f"{node}_a",
                         "Bus2": f"{node}_b",
                         "Bus3": f"{node}_c",
-                        "kV": kV,
+                        "kV": float(kvll_oper) if kvll_oper is not None else kV,
                         "Angle_a": float(angle_a),
                         "SC1ph": sc1,
                         "SC3ph": sc3,

@@ -168,8 +168,8 @@ def write_pins_sheet(xw, input_path: Path) -> None:
     Protections:
       - All bus/ID strings are sanitized via safe_name (so '-' -> '__', etc.).
       - **Island policy** drives inclusion:
-          * If an active island is chosen → include only that island.
-          * If none chosen → include only islands with a voltage source.
+          * If an active island is chosen â†’ include only that island.
+          * If none chosen â†’ include only islands with a voltage source.
     """
     root = ET.fromstring(input_path.read_text(encoding="utf-8", errors="ignore"))
 

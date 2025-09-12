@@ -11,7 +11,8 @@ PHASES = ("A", "B", "C")
 SUFFIX = {"A": "_a", "B": "_b", "C": "_c"}
 
 # Native switch-like device tags we export as switches
-DEVICE_TAGS = ("Switch", "Sectionalizer", "Breaker", "Fuse")
+# Include Recloser as a switch-like device
+DEVICE_TAGS = ("Switch", "Sectionalizer", "Breaker", "Fuse", "Recloser")
 
 # Miscellaneous devices to TREAT AS series switches
 # Includes RB (meter) and LA (lightning arrester).
@@ -131,7 +132,7 @@ def _rows_from_file(txt_path: Path) -> List[Tuple[str, str, str, int]]:
         from_bus = safe_name(from_bus_raw)  # base (no phase suffix)
         to_bus   = safe_name(to_bus_raw)    # base (no phase suffix)
 
-        # Phases declared on the section; if none, we’ll derive from per-device fields or default ABC
+        # Phases declared on the section; if none, weâ€™ll derive from per-device fields or default ABC
         sec_phases = _phase_tokens(sec.findtext("Phase"))
 
         # Should a row (for any phase) be commented?
@@ -171,7 +172,7 @@ def _rows_from_file(txt_path: Path) -> List[Tuple[str, str, str, int]]:
                     fb_out = f"//{fb}" if _comment_row() else fb
                     rows.append((fb_out, tb, rid, 1 if is_closed else 0))
 
-        # --- Miscellaneous → treat selected DeviceID codes as series switches ---
+        # --- Miscellaneous â†’ treat selected DeviceID codes as series switches ---
         for dev in sec.findall(".//Devices/Miscellaneous"):
             dev_code = ((dev.findtext("DeviceID") or "").strip().upper())
             if dev_code not in MISC_AS_SWITCH_IDS:

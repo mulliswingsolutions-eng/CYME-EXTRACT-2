@@ -17,7 +17,7 @@ def allowed_buses() -> Set[str]:
     """
     Buses that are kept in the export.
     Rules:
-      - If bus_to_island has already been reduced to one island (GUI’s “activate island”),
+      - If bus_to_island has already been reduced to one island (GUIâ€™s â€œactivate islandâ€),
         keep *only* those buses, minus any in bad_buses.
       - Else (no specific island activated), keep the union of all islands that have a slack
         (i.e., islands that have a voltage source). This is derived from slack_per_island.
@@ -28,7 +28,7 @@ def allowed_buses() -> Set[str]:
     if b2i:
         return set(b2i.keys()) - bad
 
-    # No “active island” filter was applied; keep all sourceful islands
+    # No â€œactive islandâ€ filter was applied; keep all sourceful islands
     islands = {int(i): set(v) for i, v in dict(c.get("islands", {})).items()}
     slack_per_island = dict(c.get("slack_per_island", {}))  # sourceful islands only
     keep_sets = [islands[i] for i in islands if i in slack_per_island]
@@ -45,11 +45,11 @@ def should_comment_bus(bus_base: str | None) -> bool:
     return not is_bus_allowed(bus_base)
 
 def should_comment_branch(from_bus: str | None, to_bus: str | None) -> bool:
-    """Comment a 2-terminal device if EITHER endpoint isn’t allowed."""
+    """Comment a 2-terminal device if EITHER endpoint isnâ€™t allowed."""
     return (not is_bus_allowed(from_bus)) or (not is_bus_allowed(to_bus))
 
 def should_comment_3w(b1: str | None, b2: str | None, b3: str | None) -> bool:
-    """Comment a 3-terminal device if ANY endpoint isn’t allowed."""
+    """Comment a 3-terminal device if ANY endpoint isnâ€™t allowed."""
     return (not is_bus_allowed(b1)) or (not is_bus_allowed(b2)) or (not is_bus_allowed(b3))
 
 # --- Optional pruning policy: remove instead of comment ----------------------

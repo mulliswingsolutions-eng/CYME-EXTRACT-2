@@ -44,7 +44,7 @@ def _f(s: Optional[str]) -> float:
 # ---- read line/cable databases (per-length) ----
 def _read_line_db_map(root: ET.Element) -> Dict[str, Dict[str, float]]:
     """
-    EquipmentID -> dict of per-length values (assumed per-km for R/X and µS/km for B).
+    EquipmentID -> dict of per-length values (assumed per-km for R/X and ÂµS/km for B).
     Supports BOTH:
       - per-phase set: SelfResistance*, SelfReactance*, ShuntSusceptance*, Mutual*
       - sequence set:  PositiveSequenceResistance/Reactance/ShuntSusceptance,
@@ -151,12 +151,13 @@ def _iter_lines(root: ET.Element):
             }
             continue
 
-        # Underground variants
+        # Underground variants (include 'Cable' device)
         ug = (
             sec.find(".//Devices/Underground")
             or sec.find(".//Devices/UndergroundCable")
             or sec.find(".//Devices/UndergroundCableUnbalanced")
             or sec.find(".//Devices/UndergroundByPhase")
+            or sec.find(".//Devices/Cable")
         )
         if ug is not None:
             yield {
@@ -172,7 +173,7 @@ def _iter_lines(root: ET.Element):
 
 # ---- helpers to compute R/X/B per mile from DB ----
 def _scaled(v: float) -> float:
-    """per-km → per-mile (R/X in Ω; B in µS)."""
+    """per-km â†’ per-mile (R/X in Î©; B in ÂµS)."""
     return v * MI_PER_KM
 
 
@@ -224,7 +225,7 @@ def _series_shunt_for_pair(dbvals: Dict[str, float], p1: str, p2: Optional[str] 
     Return (r11, x11, b11, r21, x21, b21, r22, x22, b22) per mile.
     Works with either per-phase DBs or sequence-only DBs.
     - If sequence-only: use transposed-line relations above.
-    - For 2-φ, we set r22/x22/b22 = r11/x11/b11 and r21/x21/b21 = mutual.
+    - For 2-Ï†, we set r22/x22/b22 = r11/x11/b11 and r21/x21/b21 = mutual.
     """
     if _has_per_phase(dbvals):
         # per-phase data available
@@ -246,7 +247,7 @@ def _series_shunt_for_pair(dbvals: Dict[str, float], p1: str, p2: Optional[str] 
         b21 = _scaled(dbvals.get(f"MutualShuntSusceptance{key}", 0.0)) * 2.0
         return r11, x11, b11, r21, x21, b21, r22, x22, b22
 
-    # sequence-only → build equivalents
+    # sequence-only â†’ build equivalents
     r_s, x_s, b_s, r_m, x_m, b_m = _per_phase_matrix_from_seq(dbvals)
 
     if not p2:
@@ -282,19 +283,19 @@ def write_line_sheet(xw, input_path: Path) -> None:
         # island filter decision **before** we add _unknown
         comment_for_island = should_comment_branch(from_base, to_base)
 
-        # now append _unknown for endpoints that don’t exist on the Bus sheet
+        # now append _unknown for endpoints that donâ€™t exist on the Bus sheet
         from_bus = _mark_unknown(from_base)
         to_bus   = _mark_unknown(to_base)
 
-        unknown = from_bus.endswith("_unknown") or to_bus.endswith("_unknown")
-
-        # Drop entirely if policy says remove and this row would be commented
-        if drop_mode_enabled() and (comment_for_island or unknown):
+        unknown_from = from_bus.endswith("_unknown")
+        unknown_to   = to_bus.endswith("_unknown")
+        # Drop entirely only if BOTH endpoints are inactive/missing in drop mode.
+        # Keep boundary edges (one endpoint in a different island) so they appear in the sheet.
+        if drop_mode_enabled() and comment_for_island and (unknown_from and unknown_to):
             continue
 
-        # final ID (comment if either island filter says so OR endpoint unknown)
-        id_out = ("//" if (comment_for_island or unknown) else "") + item["id"]
-
+        # Comment only if BOTH endpoints are inactive/missing; otherwise keep visible for troubleshooting.
+        id_out = ("//" if (comment_for_island and (unknown_from and unknown_to)) else "") + item["id"]
         length_mi = (item["length_m"] or 0.0) * MI_PER_M
         status = 1
 
@@ -347,7 +348,7 @@ def write_line_sheet(xw, input_path: Path) -> None:
                 b31 = _scaled(dbvals.get("MutualShuntSusceptanceCA", 0.0))
                 b32 = _scaled(dbvals.get("MutualShuntSusceptanceBC", 0.0))
             else:
-                # sequence-only → build full matrix from Z1/Z0 and B1/B0
+                # sequence-only â†’ build full matrix from Z1/Z0 and B1/B0
                 r_s, x_s, b_s, r_m, x_m, b_m = _per_phase_matrix_from_seq(dbvals)
                 r11 = r22 = r33 = r_s; x11 = x22 = x33 = x_s
                 r21 = r31 = r32 = r_m; x21 = x31 = x32 = x_m
@@ -483,3 +484,4 @@ def write_line_sheet(xw, input_path: Path) -> None:
         th
     )
     ws.merge_range(b5_e, 0, b5_e, 2, "End of Three-Phase Line with Sequential Data")
+

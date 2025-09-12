@@ -245,7 +245,7 @@ def _kw_kvar_from_value(val: ET.Element) -> tuple[float | None, float | None]:
     return _float_or_none(lv.findtext("KW")), _float_or_none(lv.findtext("KVAR"))
 
 
-def _expand_phases(phase_tag: str) -> List[str]:
+def _expand_phases(phase_tag: str | None) -> List[str]:
     pt = (phase_tag or "").strip().upper()
     if pt in PHASES:
         return [pt]
@@ -312,7 +312,7 @@ def _parse_spot_and_distributed_loads(txt_path: Path) -> List[Dict[str, Any]]:
 
 
 # -----------------------
-# Group rows: 1φ / 2φ / 3φ
+# Group rows: 1Ï† / 2Ï† / 3Ï†
 # -----------------------
 def _group_by_device(observations: List[Dict[str, Any]]):
     acc: Dict[str, Dict[str, Dict[str, float]]] = {}
@@ -435,7 +435,42 @@ def write_load_sheet(xw, input_path: Path) -> None:
     single_rows, two_rows, three_rows = _group_by_device(obs)
 
     # Voltage map (built on sanitized node names)
+    # Prefer Bus-sheet base voltages (LN â†’ LL) when available; fall back to inference.
     bus_kvll = _build_voltage_map(input_path)
+
+    def _bus_ll_kv_from_bus_sheet(txt_path: Path) -> Dict[str, float]:
+        """Read Bus sheet rows to get per-bus LL voltage in kV.
+        Uses Extractor's own Bus builder for consistent results.
+        """
+        try:
+            # Lazy import to avoid cycles at module import time
+            from Modules.Bus import extract_bus_data  # type: ignore
+            import math as _math
+            out: Dict[str, float] = {}
+            for row in extract_bus_data(txt_path):
+                bus_raw = str(row.get("Bus", "")).strip()
+                if not bus_raw or bus_raw.startswith("//"):
+                    continue
+                # Strip phase suffix _a/_b/_c to get base name
+                base = _PHASE_SUFFIX_RE.sub("", bus_raw)
+                ln_volts = row.get("Base Voltage (V)")
+                if isinstance(ln_volts, (int, float)) and ln_volts > 0:
+                    ll_kv = (float(ln_volts) * _math.sqrt(3.0)) / 1000.0
+                    out[base] = ll_kv
+            return out
+        except Exception:
+            return {}
+
+    bus_ll_from_bus_sheet = _bus_ll_kv_from_bus_sheet(input_path)
+    # Choose a reasonable default: most common LL value on the Bus sheet if present
+    default_ll = None
+    if bus_ll_from_bus_sheet:
+        try:
+            from collections import Counter as _Counter
+            vals = [round(v, 3) for v in bus_ll_from_bus_sheet.values() if v and v > 0]
+            default_ll = _Counter(vals).most_common(1)[0][0] if vals else None
+        except Exception:
+            default_ll = None
 
     # Anchors (computed dynamically to avoid empty data rows when pruning)
     r = 10
@@ -483,7 +518,10 @@ def write_load_sheet(xw, input_path: Path) -> None:
     for row in single_rows:
         kz, ki, kp = _zip_flags(row["CustType"], row.get("LVT"))
         bus = row["Bus"]
-        vkv = bus_kvll.get(bus, bus_kvll["_default_"])
+        if bus_ll_from_bus_sheet:
+            vkv = bus_ll_from_bus_sheet.get(bus, default_ll if default_ll is not None else bus_kvll.get(bus, bus_kvll["_default_"]))
+        else:
+            vkv = bus_kvll.get(bus, bus_kvll["_default_"])
         conn = (row["Conn"] or "").lower()
 
         # Always drop loads whose bus is not allowed (prevents empty inputs and orphan refs)
@@ -523,7 +561,10 @@ def write_load_sheet(xw, input_path: Path) -> None:
     for row in two_rows:
         kz, ki, kp = _zip_flags(row["CustType"], row.get("LVT"))
         bus = row["Bus"]
-        vkv = bus_kvll.get(bus, bus_kvll["_default_"])
+        if bus_ll_from_bus_sheet:
+            vkv = bus_ll_from_bus_sheet.get(bus, default_ll if default_ll is not None else bus_kvll.get(bus, bus_kvll["_default_"]))
+        else:
+            vkv = bus_kvll.get(bus, bus_kvll["_default_"])
         p1, p2 = row["PhasePair"]
         conn = (row["Conn"] or "").lower()
 
@@ -561,7 +602,10 @@ def write_load_sheet(xw, input_path: Path) -> None:
     for row in three_rows:
         kz, ki, kp = _zip_flags(row["CustType"], row.get("LVT"))
         bus = row["Bus"]
-        vkv = bus_kvll.get(bus, bus_kvll["_default_"])
+        if bus_ll_from_bus_sheet:
+            vkv = bus_ll_from_bus_sheet.get(bus, default_ll if default_ll is not None else bus_kvll.get(bus, bus_kvll["_default_"]))
+        else:
+            vkv = bus_kvll.get(bus, bus_kvll["_default_"])
         conn = (row["Conn"] or "").lower()
 
         if not is_bus_allowed(bus):

@@ -10,6 +10,7 @@ from Modules.General import safe_name, set_island_context
 LINE_LIKE = {
     "OverheadLine", "OverheadLineUnbalanced", "OverheadByPhase",
     "Underground", "UndergroundCable", "UndergroundCableUnbalanced", "UndergroundByPhase",
+    "Cable",  # include standalone Cable device as conducting branch
 }
 SWITCH_LIKE = {"Switch", "Sectionalizer", "Breaker", "Fuse", "Recloser", "Isolator", "Miscellaneous"}
 TRANSFORMERS = {"Transformer"}
@@ -193,9 +194,15 @@ def check_islands(xml_path: Path) -> Dict:
     source_nodes = _vs_page_source_nodes(root)
     shunt_nodes = _shunt_buses(root)
 
-    out_list = []
-    for i, comp in enumerate(sorted(comps, key=lambda s: (-len(s), min(s) if s else "")), start=1):
+    # Sort "good" islands (with sources) first, then by size desc, then lexicographically
+    comps_info = []
+    for comp in comps:
         has_source = any(n in source_nodes for n in comp)
+        comps_info.append((comp, has_source))
+    comps_info.sort(key=lambda t: (0 if t[1] else 1, -len(t[0]), min(t[0]) if t[0] else ""))
+
+    out_list = []
+    for i, (comp, has_source) in enumerate(comps_info, start=1):
         has_shunt = any(n in shunt_nodes for n in comp)
         sample = sorted(list(comp))[:20]
         out_list.append({

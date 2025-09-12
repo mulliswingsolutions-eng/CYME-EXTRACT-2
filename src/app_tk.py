@@ -1,4 +1,4 @@
-﻿# src/app_tk.py  — Premium UI + Island workflow (click row to activate)
+﻿# src/app_tk.py  - Premium UI + Island workflow (click row to activate)
 from __future__ import annotations
 import os, sys, json, threading, queue, traceback, platform, subprocess
 from pathlib import Path
@@ -9,7 +9,6 @@ from typing import Any, Callable, TYPE_CHECKING, cast
 import customtkinter as ctk
 import pandas as pd
 
-# ----- Project setup ----------------------------------------------------------
 # ----- Project setup ----------------------------------------------------------
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -39,7 +38,7 @@ from Modules.Transformer import write_transformer_sheet
 from Modules.Switch import write_switch_sheet
 from Modules.Shunt import write_shunt_sheet
 
-APP_NAME = "CYME → XLSX Extractor"
+APP_NAME = "CYME ? XLSX Extractor"
 CONF_PATH = Path.home() / ".cyme_extractor_gui.json"
 
 DEFAULT_SHEETS = {
@@ -412,7 +411,7 @@ class App(ctk.CTk):
         # UI
         self._build_header()
         self._build_tabs()
-        # (No dark mode — single palette already applied)
+        # (No dark mode - single palette already applied)
         self._poll_events()
 
     # -- header
@@ -477,14 +476,14 @@ class App(ctk.CTk):
 
         row = ctk.CTkFrame(parent, fg_color=self.COL["BG"])
         row.pack(side="right")
-        self.sun_lbl = ctk.CTkLabel(row, text="", image=self.sun_icon, text_color=self.COL["TEXT"]) if self.sun_icon else ctk.CTkLabel(row, text="☀", text_color=self.COL["TEXT"]) 
+        self.sun_lbl = ctk.CTkLabel(row, text="", image=self.sun_icon, text_color=self.COL["TEXT"]) if self.sun_icon else ctk.CTkLabel(row, text="?", text_color=self.COL["TEXT"]) 
         self.sun_lbl.pack(side="left", padx=(0,6))
         self.theme_bool = tk.IntVar(value=1 if str(ctk.get_appearance_mode()).lower() == "dark" else 0)
         self.theme_switch = ctk.CTkSwitch(row, text="", command=self._on_theme_switch,
                                           variable=self.theme_bool, onvalue=1, offvalue=0,
                                           width=52, height=28, progress_color=self.COL["ACCENT"])
         self.theme_switch.pack(side="left")
-        self.moon_lbl = ctk.CTkLabel(row, text="", image=self.moon_icon, text_color=self.COL["TEXT"]) if self.moon_icon else ctk.CTkLabel(row, text="🌙", text_color=self.COL["TEXT"]) 
+        self.moon_lbl = ctk.CTkLabel(row, text="", image=self.moon_icon, text_color=self.COL["TEXT"]) if self.moon_icon else ctk.CTkLabel(row, text="??", text_color=self.COL["TEXT"]) 
         self.moon_lbl.pack(side="left", padx=(6,0))
 
     # -- tabs
@@ -529,7 +528,7 @@ class App(ctk.CTk):
         self.in_entry = ctk.CTkEntry(row1, textvariable=self.in_path, height=38, font=(self.UI_FONT, self.UI_SIZE))
         # expand entry to fill available horizontal space
         self.in_entry.pack(side="left", padx=(0, 12), fill="x", expand=True)
-        ctk.CTkButton(row1, text="Browse…", command=self._browse_in,
+        ctk.CTkButton(row1, text="Browse...", command=self._browse_in,
                       fg_color=self.COL["ACCENT"], hover_color=self.COL["ACCENT_HOVER"],
                       font=(self.UI_FONT, self.UI_SIZE), height=38, corner_radius=10).pack(side="left", padx=(0, 8))
         ctk.CTkButton(row1, text="Open Input Folder", command=self._open_in_dir,
@@ -543,7 +542,7 @@ class App(ctk.CTk):
         ctk.CTkLabel(row2, text="Output Excel", font=(self.UI_FONT, self.UI_SIZE), text_color=self.COL["TEXT"]).pack(side="left", padx=(2, 12))
         self.out_entry = ctk.CTkEntry(row2, textvariable=self.out_path, height=38, font=(self.UI_FONT, self.UI_SIZE))
         self.out_entry.pack(side="left", padx=(0, 12), fill="x", expand=True)
-        ctk.CTkButton(row2, text="Save As…", command=self._browse_out,
+        ctk.CTkButton(row2, text="Save As...", command=self._browse_out,
                       fg_color=self.COL["ACCENT"], hover_color=self.COL["ACCENT_HOVER"],
                       font=(self.UI_FONT, self.UI_SIZE), height=38, corner_radius=10).pack(side="left", padx=(0, 8))
         ctk.CTkButton(row2, text="Open Output Folder", command=self._open_out_dir,
@@ -698,10 +697,10 @@ class App(ctk.CTk):
         self.tree.column("bus_count", width=120, anchor="center")
         self.tree.column("good", width=120, anchor="center")
         self.tree.pack(fill="both", expand=True)
-        # click selection → set active island
+        # click selection ? set active island
         self.tree.bind("<ButtonRelease-1>", self._on_island_click)
 
-        # bottom: horizontal split (bus list | summary)
+        # bottom: horizontal split (bus list | map)
         hpane = ttk.Panedwindow(bottom, orient="horizontal", style="Card.TPanedwindow")
         hpane.pack(fill="both", expand=True)
 
@@ -717,12 +716,72 @@ class App(ctk.CTk):
         self.bus_list.pack(fill="both", expand=True, padx=8, pady=8)
         self.bus_list.configure(state="disabled")
 
-        # summary console
-        ctk.CTkLabel(summary_frame, text="Island summary:", font=(self.UI_FONT, self.UI_SIZE, "bold"), text_color=self.COL["TEXT"], fg_color=self.COL["CARD"]).pack(anchor="w", padx=8, pady=(6, 0))
-        self.island_summary = ctk.CTkTextbox(summary_frame, corner_radius=10, font=(self.MONO_FONT, self.UI_SIZE),
-                                             fg_color=self.COL["CONSOLE_BG"], text_color=self.COL["CONSOLE_FG"])
-        self.island_summary.pack(fill="both", expand=True, padx=8, pady=8)
-        self.island_summary.configure(state="disabled")
+        # island map canvas
+        ctk.CTkLabel(summary_frame, text="Island map:", font=(self.UI_FONT, self.UI_SIZE, "bold"), text_color=self.COL["TEXT"], fg_color=self.COL["CARD"]).pack(anchor="w", padx=8, pady=(6, 0))
+        self.map_container = summary_frame
+        self.island_map = tk.Canvas(summary_frame, highlightthickness=0, background=self.COL["CARD"])
+        self.island_map.pack(fill="both", expand=True, padx=8, pady=8)
+        # Loading overlay (indeterminate progress) for async map builds
+        # Queues/worker state for async map rendering
+        self._map_queue: "queue.Queue[tuple[int, int | None, dict]]" = queue.Queue()
+        self._map_job_counter: int = 0
+        # Circular spinner overlay (themed)
+        try:
+            self.map_spinner = tk.Canvas(self.island_map, width=36, height=36, highlightthickness=0, bg=self.COL["CARD"])
+            self._spinner_angle = 0
+            self._spinner_running = False
+        except Exception:
+            self.map_spinner = None
+        # Map view state for auto-fit/center
+        self._map_fitted: bool = False
+        self._last_map_island: int | None = None
+        # Redraw on resize (and trigger refit)
+        self.island_map.bind("<Configure>", self._on_map_configure)
+        # Zoom with mouse wheel (Windows/macOS) and Button-4/5 (X11)
+        self.island_map.bind("<MouseWheel>", self._on_map_wheel)
+        self.island_map.bind("<Button-4>", lambda e: self._on_map_wheel(e, delta=120))
+        self.island_map.bind("<Button-5>", lambda e: self._on_map_wheel(e, delta=-120))
+        # Pan by dragging with left mouse button
+        self.island_map.bind("<ButtonPress-1>", lambda e: self.island_map.scan_mark(e.x, e.y))
+        self.island_map.bind("<B1-Motion>", lambda e: self.island_map.scan_dragto(e.x, e.y, gain=1))
+
+    def _show_map_loader(self, show: bool):
+        try:
+            if not hasattr(self, 'map_spinner') or self.map_spinner is None:
+                return
+            if show:
+                w = max(50, int(self.island_map.winfo_width() or 0))
+                h = max(50, int(self.island_map.winfo_height() or 0))
+                self.map_spinner.configure(bg=self.COL.get("CARD", "#FFFFFF"))
+                self.map_spinner.place(x=w//2, y=h//2, anchor='center')
+                self._spinner_running = True
+                self._spinner_tick()
+            else:
+                self._spinner_running = False
+                self.map_spinner.place_forget()
+        except Exception:
+            pass
+
+    def _spinner_tick(self):
+        try:
+            if not getattr(self, '_spinner_running', False) or self.map_spinner is None:
+                return
+            c = self.map_spinner
+            c.delete('all')
+            W = int(c.winfo_width() or 36); H = int(c.winfo_height() or 36)
+            s = min(W, H)
+            pad = 4
+            x0, y0, x1, y1 = pad, pad, s - pad, s - pad
+            # base ring
+            c.create_oval(x0, y0, x1, y1, outline=self.COL.get('BORDER', '#E5E7EB'), width=2)
+            # moving arc
+            ang = int(getattr(self, '_spinner_angle', 0)) % 360
+            extent = 270
+            c.create_arc(x0, y0, x1, y1, start=ang, extent=extent, style='arc', outline=self.COL.get('ACCENT', '#A78BFA'), width=3)
+            self._spinner_angle = (ang + 18) % 360
+            self.after(60, self._spinner_tick)
+        except Exception:
+            pass
 
     # -- theme switching
     def _on_theme_change(self, value: str):
@@ -875,7 +934,12 @@ class App(ctk.CTk):
             self.btn_analyze.configure(fg_color=self.COL["ACCENT"], hover_color=self.COL["ACCENT_HOVER"])
             self.btn_island_reset.configure(fg_color=self.COL["ACCENT_SOFT"], hover_color=self.COL["ACCENT_SOFT_HOVER"], text_color=self.COL["ACCENT"])
             self.bus_list.configure(fg_color=self.COL["CONSOLE_BG"], text_color=self.COL["CONSOLE_FG"])
-            self.island_summary.configure(fg_color=self.COL["CONSOLE_BG"], text_color=self.COL["CONSOLE_FG"])
+            # Canvas background to match card color
+            if hasattr(self, 'island_map') and self.island_map is not None:
+                try:
+                    self.island_map.configure(background=self.COL["CARD"])
+                except Exception:
+                    pass
             self.active_island_label.configure(text_color=self.COL["MUTED"])
         except Exception:
             pass
@@ -970,23 +1034,23 @@ class App(ctk.CTk):
             cur = 0
 
             # Analyze first
-            self._emit("log", f"[1/{total}] Analyzing islands �")
+            self._emit("log", "Analyzing islands")
             analyze_and_set_island_context(in_path, per_island_limit=50)
             # Decide export scope now (UI click does NOT prune; we prune only at run time)
             if self.active_island_id is not None:
-                self._emit("log", f" ? Exporting ONLY island {self.active_island_id}")
+                self._emit("log", f" - Export scope: only island {self.active_island_id}")
                 _filter_context_to_island(self, self.active_island_id)
             else:
-                self._emit("log", " ? No active island chosen: keeping all islands WITH voltage sources; pruning islands without sources")
+                self._emit("log", " - No island selected. Keeping islands with voltage sources; excluding islands without sources")
                 _keep_sourceful_islands_context(self, in_path)
 
             # If user already chose an active island earlier, re-apply it after analysis
             if self.active_island_id is not None:
                 try:
                     self._apply_selected_island_context(self.active_island_id)
-                    self._emit("log", f" ? Active island preserved: {self.active_island_id}")
+                    self._emit("log", f" - Active island preserved: {self.active_island_id}")
                 except Exception as e:
-                    self._emit("log", f" ! Failed to re-apply active island: {e}")
+                    self._emit("log", f" ! Could not re-apply the active island: {e}")
 
             # Refresh island UI
             self._emit("islands", None)
@@ -994,7 +1058,7 @@ class App(ctk.CTk):
             self._emit("progress", int(cur / total * 100))
 
             # Write workbook
-            self._emit("log", f"[2/{total}] Writing workbook ? {out_path}")
+            self._emit("log", f"Writing workbook - {out_path}")
             out_path.parent.mkdir(parents=True, exist_ok=True)
             opened_path = out_path
             try:
@@ -1003,7 +1067,7 @@ class App(ctk.CTk):
                 from datetime import datetime
                 alt = out_path.with_name(f"{out_path.stem}__{datetime.now().strftime('%Y%m%d_%H%M%S')}{out_path.suffix}")
                 opened_path = alt
-                self._emit("log", f" ! Output file locked. Writing to: {alt}")
+                self._emit("log", f" ! Output file is in use. Writing to new file: {alt}")
                 writer = pd.ExcelWriter(alt, engine="xlsxwriter")
             with writer as xw:
                 # Apply prune policy to the island context (comment vs remove)
@@ -1016,12 +1080,13 @@ class App(ctk.CTk):
                 except Exception:
                     pass
                 for name, fn in steps:
+                    # Log each sheet succinctly
                     self._emit("log", f"  - {name}")
                     fn(xw, in_path)
                     cur += 1
                     self._emit("progress", int(cur / total * 100))
 
-            self._emit("log", f"Done. Wrote: {opened_path}")
+            self._emit("log", f"Export complete: {opened_path}")
             self._emit("done", str(opened_path))
         except Exception as e:
             self._emit("error", "".join(traceback.format_exception(e)))
@@ -1066,7 +1131,7 @@ class App(ctk.CTk):
                 return
             island_id = int(values[0])
 
-            # Only record choice & refresh UI — DO NOT prune context here
+            # Only record choice & refresh UI - DO NOT prune context here
             self.active_island_id = island_id
             self.active_island_label.configure(text=f"Active island: {island_id}")
             # update the right-hand panels (bus list/summary) without mutating context
@@ -1124,7 +1189,7 @@ class App(ctk.CTk):
         }
         set_island_context(new_ctx)
 
-    # ----- thread → UI bridge -------------------------------------------------
+    # ----- thread ? UI bridge -------------------------------------------------
     def _emit(self, kind: str, payload: Any):
         self.events.put((kind, payload))
 
@@ -1146,6 +1211,31 @@ class App(ctk.CTk):
                     self._set_busy(False); self._append_log(str(payload)); messagebox.showerror(APP_NAME, "An error occurred.\n\nSee log for details.")
                 elif kind == "islands":
                     self._refresh_islands_tab()
+        except queue.Empty:
+            pass
+        # Poll async island map build results too
+        try:
+            while True:
+                job_id, isl, data = self._map_queue.get_nowait()
+                if job_id != getattr(self, '_map_job_counter', 0):
+                    continue  # stale job, ignore
+                if isinstance(data, dict) and data.get('error'):
+                    self._show_map_loader(False)
+                    continue
+                # Instrumentation: log quick diagnostics if present
+                try:
+                    diag = data.get('diag') if isinstance(data, dict) else None
+                    if isinstance(diag, dict):
+                        a = diag.get('anchors'); ps = diag.get('poly_sections'); pp = diag.get('poly_points'); sn = diag.get('synthetic_nodes')
+                        self._append_log(f"Map diag — anchors={a}, poly_sections={ps}, poly_points={pp}, synthetic={sn}")
+                        if (a or 0) == 0 and (ps or 0) == 0:
+                            self._append_log("No diagram geometry — using fallback layout")
+                except Exception:
+                    pass
+                try:
+                    self._render_island_map_from_data(data)
+                finally:
+                    self._show_map_loader(False)
         except queue.Empty:
             pass
         self.after(100, self._poll_events)
@@ -1199,6 +1289,16 @@ class App(ctk.CTk):
             iid = self.tree.insert("", "end", values=(isl, slack, counts[isl], is_good))
             item_id_by_island[isl] = iid
 
+        # If nothing selected/active yet, auto-select a sensible default after analysis
+        if not select_island and self.active_island_id is None and item_id_by_island:
+            # Prefer a "good" island (not marked bad), else the first by id
+            try:
+                preferred = next((i for i in islands if i not in bad_islands), None)
+            except Exception:
+                preferred = None
+            select_island = preferred if preferred is not None else islands[0]
+            self.active_island_id = select_island
+
         # update active label
         if self.active_island_id is not None:
             self.active_island_label.configure(text=f"Active island: {self.active_island_id}")
@@ -1216,24 +1316,14 @@ class App(ctk.CTk):
                 self._suppress_island_event = False
                 self._handling_island_click: bool = False
 
-        # summary
-        total_islands = len(islands)
-        good_count = total_islands - len(bad_islands)
-        lines = [
-            f"Islands found: {total_islands}",
-            f"Good islands (with source): {good_count}",
-            f"Without source: {len(bad_islands)}",
-            "",
-            "Slack per island:",
-        ]
-        for isl in islands:
-            lines.append(
-                f"  - Island {isl}: {slack_per_island.get(isl, '(none)')}  |  Buses: {counts[isl]}  |  Good: {'Yes' if isl not in bad_islands else 'No'}"
-            )
-        self.island_summary.configure(state="normal")
-        self.island_summary.delete("1.0", "end")
-        self.island_summary.insert("end", "\n".join(lines))
-        self.island_summary.configure(state="disabled")
+        # draw/update map for current selection (async)
+        sel = self.tree.selection()
+        if sel:
+            item = self.tree.item(sel[0]); vals = item.get("values", [])
+            isl_for_map = int(vals[0]) if vals else None
+        else:
+            isl_for_map = self.active_island_id
+        self._start_island_map_job(isl_for_map, bus_to_island)
 
         # bus list for current selection (if any), else active, else placeholder
         sel = self.tree.selection()
@@ -1242,7 +1332,6 @@ class App(ctk.CTk):
             isl = int(vals[0]) if vals else None
         else:
             isl = self.active_island_id
-
         self._populate_bus_list_for_island(isl, bus_to_island)
 
     def _populate_bus_list_for_island(self, isl: int | None, bus_to_island: dict[str, int]):
@@ -1259,6 +1348,2039 @@ class App(ctk.CTk):
             self.bus_list.insert("end", "\n".join(buses))
         self.bus_list.configure(state="disabled")
 
+    # ----- Island map drawing -------------------------------------------------
+    def _redraw_island_map(self):
+        try:
+            ctx = get_island_context() or {}
+            bus_to_island: dict[str, int] = dict(ctx.get("bus_to_island", {}))
+            sel = self.tree.selection()
+            if sel:
+                item = self.tree.item(sel[0]); vals = item.get("values", [])
+                isl = int(vals[0]) if vals else None
+            else:
+                isl = self.active_island_id
+            # Reset fit when island changes
+            if getattr(self, "_last_map_island", None) != isl:
+                try:
+                    self._map_fitted = False
+                except Exception:
+                    pass
+                self._last_map_island = isl
+            self._start_island_map_job(isl, bus_to_island)
+        except Exception:
+            pass
+
+    def _on_map_configure(self, event=None):
+        try:
+            # Any canvas size change should trigger a refit on next draw
+            self._map_fitted = False
+        except Exception:
+            pass
+        self._redraw_island_map()
+
+    # Async trigger for island map rendering so UI stays responsive
+    def _start_island_map_job(self, isl: int | None, bus_to_island: dict[str, int]):
+        try:
+            # Cancel previous pending jobs by bumping the counter
+            self._map_job_counter = int(getattr(self, '_map_job_counter', 0)) + 1
+            job_id = self._map_job_counter
+            # Show loader now
+            self._show_map_loader(True)
+            # Clear previous map immediately so old island disappears right away
+            try:
+                if hasattr(self, 'island_map') and self.island_map is not None:
+                    self.island_map.delete('all')
+            except Exception:
+                pass
+
+            # Launch compute on a background thread; main thread will render
+            # once results arrive via _map_queue.
+            in_path = Path(self.in_path.get() or "").expanduser()
+            def _worker():
+                try:
+                    data = self._compute_island_map_data(isl, bus_to_island, in_path)
+                except Exception as e:
+                    data = {"error": str(e)}
+                try:
+                    self._map_queue.put((job_id, isl, data))
+                except Exception:
+                    pass
+            threading.Thread(target=_worker, daemon=True).start()
+        except Exception:
+            # On any failure, fall back to direct draw and hide loader safely
+            try:
+                data = self._compute_island_map_data(isl, bus_to_island, Path(self.in_path.get() or "").expanduser())
+                self._map_queue.put((self._map_job_counter, isl, data))
+            finally:
+                self._show_map_loader(False)
+
+    # Compatibility layer for async map build/render.
+    # Move heavy XML parsing and normalization to a background thread
+    # and only do the lightweight canvas mapping/drawing on the UI thread.
+    def _compute_island_map_data(self, isl: int | None, bus_to_island: dict[str, int], in_path: Path) -> dict:
+        out: dict[str, Any] = {"version": 4, "isl": isl}
+        try:
+            if isl is None or not isinstance(bus_to_island, dict):
+                out["error"] = "no island"
+                return out
+            # Selected island nodes
+            nodes = sorted([b for b, i in bus_to_island.items() if i == isl])
+            if not nodes:
+                out["coords_unit"] = {}
+                out["edges"] = []
+                out["polylines_unit"] = {}
+                return out
+
+            import xml.etree.ElementTree as ET
+            import math as _m
+            from Modules.General import safe_name as _safe
+            txt = in_path.read_text(encoding='utf-8', errors='ignore')
+            xml_root = ET.fromstring(txt)
+
+            nodes_set = set()  # will be set after ID normalization
+
+            # Build adjacency and capture polylines per section
+            adj: dict[str, set[str]] = {n: set() for n in nodes}
+            edges: list[tuple[str, str]] = []
+            section_polylines: dict[str, list[list[tuple[float, float]]]] = {}
+            # Track tertiary per base edge to allow polyline splitting later
+            tert_by_edge: dict[str, set[str]] = {}
+            # Device collections
+            bus_sources: set[str] = set()
+            bus_loads: dict[str, int] = {}
+            bus_shunts: dict[str, int] = {}
+            inline_devs: dict[str, list[dict[str, str]]] = {}
+
+            def edge_key(a: str, b: str) -> str:
+                return "|".join(sorted((a, b)))
+
+            def _finite(v: float | None) -> bool:
+                try:
+                    return v is not None and _m.isfinite(v) and abs(float(v)) < 1e12
+                except Exception:
+                    return False
+
+            def _read_xy(el: ET.Element) -> tuple[float | None, float | None]:
+                # Strictly geometry fields only
+                cand = [
+                    (el.findtext('X'), el.findtext('Y')),
+                    (el.findtext('PosX'), el.findtext('PosY')),
+                    (el.findtext('CoordX'), el.findtext('CoordY')),
+                    (el.findtext('MapX'), el.findtext('MapY')),
+                ]
+                # Attribute forms
+                cand.extend([
+                    (el.get('x'), el.get('y')),
+                    (el.get('X'), el.get('Y')),
+                    (el.get('XCoord'), el.get('YCoord')),
+                    (el.get('XCOORD'), el.get('YCOORD')),
+                ])
+                for xs, ys in cand:
+                    try:
+                        xv = float(xs) if xs not in (None, '') else None
+                        yv = float(ys) if ys not in (None, '') else None
+                    except Exception:
+                        xv = None; yv = None
+                    if _finite(xv) and _finite(yv):
+                        return xv, yv
+                # Embedded Position node
+                pos = el.find('Position') or el.find('Coordinates')
+                if pos is not None:
+                    px, py = _read_xy(pos)
+                    if _finite(px) and _finite(py):
+                        return px, py
+                return None, None
+
+            def _gather_section_polylines(sec: ET.Element) -> list[list[tuple[float, float]]]:
+                outp: list[list[tuple[float, float]]] = []
+                # Accept only known geometry containers
+                holders = [
+                    sec.find('Breakpoints'),
+                    sec.find('ShapePoints'),
+                    sec.find('Polyline'),
+                    sec.find('IntermediatePoints'),  # some templates store the path here
+                ]
+                for holder in holders:
+                    if holder is None:
+                        continue
+                    pts: list[tuple[float, float]] = []
+                    for child in list(holder):
+                        tag = child.tag.split('}')[-1].lower()
+                        if tag in ('breakpoint', 'point'):
+                            x, y = _read_xy(child)
+                            if _finite(x) and _finite(y) and not (abs(float(x)) == 0.0 and abs(float(y)) == 0.0):
+                                pts.append((float(x), float(y)))  # type: ignore[arg-type]
+                    if pts:
+                        outp.append(pts)
+                return outp
+
+            # ID normalizer wraps project safe_name and adds phase/whitespace handling
+            def _norm_id(s: str) -> str:
+                try:
+                    t = _safe((s or '').strip())
+                    t = t.replace('\n', '').replace('\r', '')
+                    t = t.replace('__', '-')
+                    t = t.casefold()
+                    # strip trailing phase suffix _a/_b/_c if present
+                    if len(t) > 2 and t.endswith(('_a','_b','_c')):
+                        t = t[:-2]
+                    return t
+                except Exception:
+                    return (s or '').strip()
+
+            # Normalize node ids first
+            nodes = [(_safe(n) or n) for n in nodes]
+            nodes = [(_safe(n) or n) for n in nodes]  # ensure safe then norm
+            def _norm_id(s: str) -> str:
+                try:
+                    t = _safe((s or '').strip())
+                    t = t.replace('\n', '').replace('\r', '')
+                    t = t.replace('__', '-')
+                    t = t.casefold()
+                    if len(t) > 2 and t.endswith(('_a','_b','_c')):
+                        t = t[:-2]
+                    return t
+                except Exception:
+                    return (s or '').strip()
+            nodes = [_norm_id(n) for n in nodes]
+            nodes_set = set(nodes)
+
+            for sec in xml_root.findall('.//Sections/Section'):
+                fb = _norm_id((sec.findtext('FromNodeID') or ''))
+                tb = _norm_id((sec.findtext('ToNodeID') or ''))
+                if not fb or not tb:
+                    continue
+                if fb in nodes_set and tb in nodes_set:
+                    if tb not in adj[fb]:
+                        adj[fb].add(tb); adj[tb].add(fb)
+                        edges.append((fb, tb))
+                # Tertiary: split into two logical edges
+                tert = _norm_id((sec.findtext('TertiaryNodeID') or ''))
+                if tert:
+                    if tert in nodes_set and fb in nodes_set:
+                        if tert not in adj[fb]:
+                            adj[fb].add(tert); adj[tert].add(fb)
+                            edges.append((fb, tert))
+                    if tert in nodes_set and tb in nodes_set:
+                        if tb not in adj[tert]:
+                            adj[tert].add(tb); adj[tb].add(tert)
+                            edges.append((tert, tb))
+                    # Record for later polyline splitting
+                    tert_by_edge.setdefault(edge_key(fb, tb), set()).add(tert)
+
+                # Geometry polylines if present
+                polylists = _gather_section_polylines(sec)
+                if polylists and fb and tb:
+                    section_polylines.setdefault(edge_key(fb, tb), []).extend(polylists)
+
+            # Devices under this section
+            devs = sec.find('./Devices')
+            if devs is not None:
+                # Loads attach to From bus per sheet rules
+                if devs.find('SpotLoad') is not None or devs.find('DistributedLoad') is not None:
+                    if fb in nodes_set:
+                        bus_loads[fb] = bus_loads.get(fb, 0) + 1
+                # Shunt devices at From bus
+                if devs.find('ShuntCapacitor') is not None or devs.find('ShuntReactor') is not None:
+                    if fb in nodes_set:
+                        bus_shunts[fb] = bus_shunts.get(fb, 0) + 1
+                # Switch-like inline devices
+                for tag in ('Switch', 'Sectionalizer', 'Breaker', 'Fuse', 'Recloser'):
+                    for d in devs.findall(tag):
+                        loc = (d.findtext('Location') or 'Middle').strip().lower()
+                        name = (d.findtext('Name') or d.findtext('DeviceID') or tag)
+                        # heuristic state parse
+                        state = (d.findtext('NormalOpen') or d.findtext('NormallyOpen') or d.findtext('Open') or d.findtext('Status') or '')
+                        closed: bool | None
+                        sv = (state or '').strip().lower()
+                        if sv in ('open', '1', 'true'):
+                            closed = False
+                        elif sv in ('closed', '0', 'false'):
+                            closed = True
+                        else:
+                            closed = None
+                        rec = {'type': 'switch', 'loc': loc}
+                        if name:
+                            rec['name'] = name
+                        if closed is not None:
+                            rec['closed'] = closed
+                        inline_devs.setdefault(edge_key(fb, tb), []).append(rec)
+                # Some miscellaneous behave as inline switches (RB, LA)
+                for d in devs.findall('Miscellaneous'):
+                    did = ((d.findtext('DeviceID') or '').strip().upper())
+                    if did in {'RB', 'LA'}:
+                        loc = (d.findtext('Location') or 'Middle').strip().lower()
+                        inline_devs.setdefault(edge_key(fb, tb), []).append({'type': 'switch', 'loc': loc, 'name': did})
+                # Transformers inline (or regulators)
+                if devs.find('Transformer') is not None or devs.find('Regulator') is not None:
+                    xf = devs.find('Transformer')
+                    loc = (xf.findtext('Location') if xf is not None else 'Middle') or 'Middle'
+                    name = (xf.findtext('Name') if xf is not None else '') or 'Transformer'
+                    inline_devs.setdefault(edge_key(fb, tb), []).append({'type': 'xfmr', 'loc': loc.strip().lower(), 'name': name})
+
+            # Real coordinates per node (best-effort)
+            def _num(x: str | None) -> float | None:
+                try:
+                    return float(x) if x not in (None, '') else None
+                except Exception:
+                    return None
+            coords_real: dict[str, tuple[float, float]] = {}
+            used_geo = False  # lat/long detected
+            for elem in xml_root.iter():
+                tag = elem.tag.split('}')[-1].lower()
+                if tag in ('tag', 'tags'):
+                    continue  # ignore label containers entirely
+                # NodeID may be in text or attribute; try both
+                nid_raw = (elem.findtext('NodeID') or elem.get('NodeID') or elem.get('NodeId') or elem.get('node') or '')
+                if not nid_raw:
+                    continue
+                # Prefer diagram units first (X/Y families)
+                nx, ny = _read_xy(elem)
+                # Else try geographic
+                if not (_finite(nx) and _finite(ny)):
+                    lon_txt = elem.findtext('Longitude'); lat_txt = elem.findtext('Latitude')
+                    try:
+                        lon = float(lon_txt) if lon_txt not in (None, '') else None
+                        lat = float(lat_txt) if lat_txt not in (None, '') else None
+                    except Exception:
+                        lon = None; lat = None
+                    if _finite(lon) and _finite(lat):
+                        # Web Mercator projection to planar meters
+                        R = 6378137.0
+                        lon_rad = _m.radians(float(lon))
+                        lat_rad = _m.radians(max(-85.06, min(85.06, float(lat))))
+                        nx = R * lon_rad
+                        ny = R * _m.log(_m.tan(_m.pi/4.0 + lat_rad/2.0))
+                        used_geo = True
+                if not (_finite(nx) and _finite(ny)):
+                    continue
+                if abs(float(nx)) == 0.0 and abs(float(ny)) == 0.0:
+                    continue
+                nid = _norm_id(nid_raw)
+                if nid in nodes_set:
+                    coords_real.setdefault(nid, (float(nx), float(ny)))  # type: ignore[arg-type]
+
+            # Voltage sources from Substation topo (normalize ids)
+            try:
+                for topo in xml_root.findall('.//Topo'):
+                    ntype = (topo.findtext('NetworkType') or '').strip().lower()
+                    eq_mode = (topo.findtext('EquivalentMode') or '').strip()
+                    if ntype != 'substation' or eq_mode == '1':
+                        continue
+                    srcs = topo.find('./Sources')
+                    if srcs is None:
+                        continue
+                    for src in srcs.findall('./Source'):
+                        nid = _norm_id(src.findtext('SourceNodeID') or '')
+                        if nid and nid in nodes_set:
+                            bus_sources.add(nid)
+            except Exception:
+                pass
+
+            # Snap polyline endpoints to node anchors in RAW space; promote anchors from polylines when needed
+            try:
+                # Compute a robust epsilon based on current raw span
+                raw_xs = [x for (x, _) in coords_real.values()]
+                raw_ys = [y for (_, y) in coords_real.values()]
+                for plist in section_polylines.values():
+                    for pts in plist:
+                        for (x, y) in pts:
+                            raw_xs.append(x); raw_ys.append(y)
+                if raw_xs and raw_ys:
+                    rx_span = max(1.0, max(raw_xs) - min(raw_xs))
+                    ry_span = max(1.0, max(raw_ys) - min(raw_ys))
+                    eps = 1e-6 * max(rx_span, ry_span)
+                else:
+                    eps = 1e-3
+
+                def _snap_poly(poly: list[tuple[float, float]], frm_xy: tuple[float, float] | None, to_xy: tuple[float, float] | None, eps: float) -> list[tuple[float, float]]:
+                    if not poly or len(poly) < 2:
+                        return poly
+                    p = list(poly)
+                    if frm_xy is not None:
+                        d0 = (p[0][0]-frm_xy[0])**2 + (p[0][1]-frm_xy[1])**2
+                        d1 = (p[-1][0]-frm_xy[0])**2 + (p[-1][1]-frm_xy[1])**2
+                        if min(d0, d1) <= eps*eps:
+                            if d0 <= d1:
+                                p[0] = frm_xy
+                            else:
+                                p[-1] = frm_xy
+                    if to_xy is not None:
+                        d0 = (p[0][0]-to_xy[0])**2 + (p[0][1]-to_xy[1])**2
+                        d1 = (p[-1][0]-to_xy[0])**2 + (p[-1][1]-to_xy[1])**2
+                        if min(d0, d1) <= eps*eps:
+                            if d1 <= d0:
+                                p[-1] = to_xy
+                            else:
+                                p[0] = to_xy
+                    return p
+
+                poly_anchored: set[str] = set()
+                for k, plist in list(section_polylines.items()):
+                    try:
+                        u, v = k.split('|', 1)
+                    except Exception:
+                        continue
+                    u_xy = coords_real.get(u)
+                    v_xy = coords_real.get(v)
+                    new_list: list[list[tuple[float, float]]] = []
+                    for pts in plist:
+                        sp = _snap_poly(pts, u_xy, v_xy, eps)
+                        new_list.append(sp)
+                        if u_xy is None and v_xy is None and sp:
+                            coords_real[u] = sp[0]
+                            coords_real[v] = sp[-1]
+                            poly_anchored.add(u); poly_anchored.add(v)
+                            u_xy = coords_real.get(u); v_xy = coords_real.get(v)
+                    section_polylines[k] = new_list
+            except Exception:
+                poly_anchored = set()
+
+            # Fallback BFS layout for structure
+            from collections import deque as _dq
+            # Try to root at slack if available
+            try:
+                ctx = get_island_context() or {}
+                slack_per_island: dict[int, str] = dict(ctx.get('slack_per_island', {}))
+                root_node = slack_per_island.get(isl) or (nodes[0] if nodes else None)
+            except Exception:
+                root_node = nodes[0] if nodes else None
+            depth: dict[str, int] = {}
+            if root_node:
+                q = _dq([root_node]); depth[root_node] = 0
+                while q:
+                    u = q.popleft()
+                    for v in sorted(adj.get(u, set())):
+                        if v not in depth:
+                            depth[v] = depth[u] + 1
+                            q.append(v)
+            for n in nodes:
+                depth.setdefault(n, 0)
+            columns: dict[int, list[str]] = {}
+            for n in nodes:
+                columns.setdefault(depth[n], []).append(n)
+            for col in columns.values():
+                col.sort()
+            coords_bfs: dict[str, tuple[float, float]] = {}
+            for dlevel, col_nodes in columns.items():
+                k = max(1, len(col_nodes))
+                for i, n in enumerate(col_nodes):
+                    x = float(dlevel)
+                    y = float(i) / float(k - 1 if k > 1 else 1)
+                    coords_bfs[n] = (x, y)
+            try:
+                dmax = max((xy[0] for xy in coords_bfs.values()), default=1.0)
+                if dmax <= 0:
+                    dmax = 1.0
+                for n, (x, y) in list(coords_bfs.items()):
+                    coords_bfs[n] = (x / dmax, y)
+            except Exception:
+                pass
+
+            # If there are two or more anchors, align BFS axis with the anchors' principal direction (PCA)
+            try:
+                anchors_u = [coords_real.get(n) for n in nodes if n in coords_real]
+                anchors_u = [(x, y) for (x, y) in anchors_u if isinstance(x, float) and isinstance(y, float)]
+                if len(anchors_u) >= 2:
+                    import math as _pm
+                    ax = [x for (x, _) in anchors_u]; ay = [y for (_, y) in anchors_u]
+                    mx = sum(ax)/len(ax); my = sum(ay)/len(ay)
+                    vx = sum((x-mx)*(x-mx) for x in ax); vy = sum((y-my)*(y-my) for y in ay); vxy = sum((ax[i]-mx)*(ay[i]-my) for i in range(len(ax)))
+                    theta = 0.5 * _pm.atan2(2.0*vxy, (vx - vy) if (vx!=vy or vxy!=0) else 1.0)
+                    ct, st = _pm.cos(theta), _pm.sin(theta)
+                    coords_bfs = {n: (x*ct - y*st, x*st + y*ct) for n,(x,y) in coords_bfs.items()}
+            except Exception:
+                pass
+
+            # Collect polyline raw points (for normalization even if no node coords)
+            poly_points: list[tuple[float, float]] = []
+            for plist in section_polylines.values():
+                for pts in plist:
+                    poly_points.extend(pts)
+
+            # Build a normalization over whatever real geometry we have (filter bad values/outliers)
+            if coords_real or poly_points:
+                xs_all = [p[0] for p in coords_real.values()] + [p[0] for p in poly_points]
+                ys_all = [p[1] for p in coords_real.values()] + [p[1] for p in poly_points]
+                minxr, maxxr = min(xs_all), max(xs_all)
+                minyr, maxyr = min(ys_all), max(ys_all)
+                spanxr = max(1.0, maxxr - minxr)
+                spanyr = max(1.0, maxyr - minyr)
+                # Drop extreme outliers beyond ~5 sigma from median (basic safeguard)
+                try:
+                    import statistics as _st
+                    mx = _st.median(xs_all); my = _st.median(ys_all)
+                    sx = _st.pstdev(xs_all) or 1.0; sy = _st.pstdev(ys_all) or 1.0
+                    limx = 5.0*sx; limy = 5.0*sy
+                    def _okx(x: float) -> bool: return abs(x - mx) <= limx
+                    def _oky(y: float) -> bool: return abs(y - my) <= limy
+                    coords_real = {n:(x,y) for n,(x,y) in coords_real.items() if _okx(x) and _oky(y)}
+                    poly_points = [(x,y) for (x,y) in poly_points if _okx(x) and _oky(y)]
+                    if coords_real or poly_points:
+                        xs_all = [p[0] for p in coords_real.values()] + [p[0] for p in poly_points]
+                        ys_all = [p[1] for p in coords_real.values()] + [p[1] for p in poly_points]
+                        minxr, maxxr = min(xs_all), max(xs_all)
+                        minyr, maxyr = min(ys_all), max(ys_all)
+                        spanxr = max(1.0, maxxr - minxr)
+                        spanyr = max(1.0, maxyr - minyr)
+                except Exception:
+                    pass
+                def _norm_geom_to_unit(x: float, y: float) -> tuple[float, float]:
+                    return (x - minxr) / spanxr, (y - minyr) / spanyr
+                coords_real_unit = {n: _norm_geom_to_unit(x, y) for n, (x, y) in coords_real.items()}
+            else:
+                coords_real_unit = {}
+
+            # Merge: BFS unit, overridden by any real-unit positions
+            coords_unit: dict[str, tuple[float, float]] = dict(coords_bfs)
+            for n, xy in coords_real_unit.items():
+                coords_unit[n] = xy
+            # Pull nodes with no real coords toward average of real neighbors (jittered)
+            # Soft relaxation only on synthetic nodes, never move anchored
+            try:
+                for _ in range(8):
+                    for n in nodes:
+                        if n in coords_real_unit:
+                            continue  # locked anchors
+                        neigh_u = [coords_unit.get(v) for v in adj.get(n, set())]
+                        neigh_u = [(x, y) for (x, y) in neigh_u if x is not None and y is not None]
+                        if not neigh_u:
+                            continue
+                        ax = sum(x for x, _ in neigh_u) / float(len(neigh_u))
+                        ay = sum(y for _, y in neigh_u) / float(len(neigh_u))
+                        px, py = coords_unit.get(n, (ax, ay))
+                        # small step toward neighbors average
+                        s = 0.2
+                        nx = px + s * (ax - px)
+                        ny = py + s * (ay - py)
+                        coords_unit[n] = (min(1.0, max(0.0, nx)), min(1.0, max(0.0, ny)))
+            except Exception:
+                pass
+
+            # Normalize polylines to unit using geometry extents if available
+            polylines_unit: dict[str, list[list[tuple[float, float]]]] = {}
+            try:
+                if coords_real or poly_points:
+                    def _norm_geom_to_unit(x: float, y: float) -> tuple[float, float]:
+                        return (x - minxr) / spanxr, (y - minyr) / spanyr  # type: ignore[name-defined]
+                    for k, plist in section_polylines.items():
+                        out_list: list[list[tuple[float, float]]] = []
+                        for pts in plist:
+                            out_list.append([_norm_geom_to_unit(px, py) for (px, py) in pts])
+                        if out_list:
+                            polylines_unit[k] = out_list
+            except Exception:
+                pass
+
+            # If we have tertiary nodes and a base-edge polyline, split the polyline at
+            # the junction nearest to the tertiary anchor so each branch gets its shape.
+            try:
+                for k, tert_set in tert_by_edge.items():
+                    if k not in polylines_unit:
+                        continue
+                    try:
+                        u, v = k.split('|', 1)
+                    except Exception:
+                        continue
+                    for tert in list(tert_set):
+                        if tert not in coords_unit:
+                            continue
+                        tx, ty = coords_unit[tert]
+                        base_list = polylines_unit.get(k) or []
+                        add_uv: list[list[tuple[float, float]]] = []
+                        add_tv: list[list[tuple[float, float]]] = []
+                        tol = 0.02  # unit-space tolerance for tee snapping
+                        tol2 = tol * tol
+                        for pts in base_list:
+                            if not pts:
+                                continue
+                            # find nearest poly point to tertiary
+                            best_i = 0; best_d = 1e9
+                            for i, (px, py) in enumerate(pts):
+                                d = (px - tx) * (px - tx) + (py - ty) * (py - ty)
+                                if d < best_d:
+                                    best_d = d; best_i = i
+                            if best_d <= tol2:
+                                left = pts[:best_i+1]
+                                right = pts[best_i:]
+                                if left and right:
+                                    add_uv.append(left)
+                                    add_tv.append(right)
+                        # attach splits and leave original polyline as-is (renderer prefers edge-specific ones)
+                        if add_uv:
+                            polylines_unit.setdefault(edge_key(u, tert), []).extend(add_uv)
+                        if add_tv:
+                            polylines_unit.setdefault(edge_key(tert, v), []).extend(add_tv)
+            except Exception:
+                pass
+
+            # If nodes lack real coords, try to infer their positions from polyline endpoints
+            if polylines_unit:
+                inferred: dict[str, list[tuple[float, float]]] = {}
+                for (u, v) in edges:
+                    k = edge_key(u, v)
+                    plist = polylines_unit.get(k)
+                    if not plist:
+                        continue
+                    # Choose ends per edge to match BFS orientation
+                    bu = coords_bfs.get(u, (0.0, 0.0))
+                    bv = coords_bfs.get(v, (1.0, 1.0))
+                    for pts in plist:
+                        if not pts:
+                            continue
+                        a = pts[0]; b = pts[-1]
+                        try:
+                            s1 = (bu[0]-a[0])**2 + (bu[1]-a[1])**2 + (bv[0]-b[0])**2 + (bv[1]-b[1])**2
+                            s2 = (bu[0]-b[0])**2 + (bu[1]-b[1])**2 + (bv[0]-a[0])**2 + (bv[1]-a[1])**2
+                            if s1 <= s2:
+                                inferred.setdefault(u, []).append(a)
+                                inferred.setdefault(v, []).append(b)
+                            else:
+                                inferred.setdefault(u, []).append(b)
+                                inferred.setdefault(v, []).append(a)
+                        except Exception:
+                            continue
+                # Average candidates
+                for n, lst in inferred.items():
+                    if n in coords_real_unit:
+                        continue
+                    if not lst:
+                        continue
+                    ax = sum(x for x, _ in lst) / float(len(lst))
+                    ay = sum(y for _, y in lst) / float(len(lst))
+                    coords_unit[n] = (ax, ay)
+
+            # Prepare result
+            out["coords_unit"] = coords_unit
+            out["edges"] = edges
+            out["polylines_unit"] = polylines_unit
+            # Heuristic Y flip: diagram-like (no geo) tends to be y-down. If we have
+            # polylines, sample gradients; otherwise fall back to diagram default.
+            y_down = True
+            try:
+                if used_geo:
+                    y_down = False
+                else:
+                    grads = []
+                    for plist in polylines_unit.values():
+                        for pts in plist:
+                            for i in range(len(pts)-1):
+                                (x0, y0), (x1, y1) = pts[i], pts[i+1]
+                                if abs(x1 - x0) + abs(y1 - y0) > 1e-6:
+                                    grads.append(y1 - y0)
+                    if grads:
+                        # If most segments increase y downward (positive), treat as y-down
+                        pos = sum(1 for g in grads if g > 0)
+                        neg = sum(1 for g in grads if g < 0)
+                        y_down = pos >= neg
+            except Exception:
+                pass
+            out["y_down"] = y_down
+            # Devices
+            out["bus_sources"] = [b for b in bus_sources if b in nodes_set]
+            out["bus_loads"] = bus_loads
+            out["bus_shunts"] = bus_shunts
+            out["inline_devs"] = inline_devs
+            # Diagnostics
+            try:
+                anchors_count = len({n for n in nodes if n in coords_real_unit})
+                poly_sec_count = sum(1 for k,v in (polylines_unit or {}).items() if v)
+                poly_pts_count = sum(len(pts) for plist in (polylines_unit or {}).values() for pts in plist)
+                synth_nodes = [n for n in nodes if n not in coords_real_unit]
+                out["diag"] = {
+                    "anchors": anchors_count,
+                    "poly_sections": poly_sec_count,
+                    "poly_points": poly_pts_count,
+                    "synthetic_nodes": len(synth_nodes),
+                    "y_down": y_down,
+                }
+            except Exception:
+                pass
+            return out
+        except Exception as e:
+            out["error"] = str(e)
+            return out
+
+    def _render_island_map_from_data(self, data: dict) -> None:
+        # Fast path: draw from precomputed unit coordinates/polylines
+        try:
+            coords_unit = data.get('coords_unit')
+            edges = data.get('edges')
+            polylines_unit = data.get('polylines_unit') or {}
+            isl = data.get('isl')
+        except Exception:
+            coords_unit = None; edges = None; polylines_unit = {}; isl = None
+
+        if isinstance(coords_unit, dict) and isinstance(edges, list):
+            try:
+                if not hasattr(self, 'island_map') or self.island_map is None:
+                    return
+                cv = self.island_map
+                cv.delete('all')
+                w = max(100, int(cv.winfo_width() or 0))
+                h = max(100, int(cv.winfo_height() or 0))
+                # If we have no geometry (anchors and polylines absent), draw manual orthogonal layout
+                try:
+                    diag = data.get('diag') if isinstance(data, dict) else None
+                    if isinstance(diag, dict) and diag.get('anchors', 0) == 0 and diag.get('poly_sections', 0) == 0:
+                        self._draw_island_map_orthogonal(data, w, h)
+                        return
+                except Exception:
+                    pass
+                if not coords_unit:
+                    # Nothing to draw — provide a gentle placeholder
+                    try:
+                        cv.create_text(w//2, h//2, text='(no buses in this island)', fill=self.COL.get('TEXT', '#334155'))
+                    except Exception:
+                        pass
+                    return
+
+                # Build bounds in unit space from nodes + polylines
+                xs = [xy[0] for xy in coords_unit.values()] if coords_unit else [0.0, 1.0]
+                ys = [xy[1] for xy in coords_unit.values()] if coords_unit else [0.0, 1.0]
+                try:
+                    for plist in polylines_unit.values():
+                        for pts in plist:
+                            for (ux, uy) in pts:
+                                xs.append(ux); ys.append(uy)
+                except Exception:
+                    pass
+                minx, maxx = (min(xs), max(xs)) if xs else (0.0, 1.0)
+                miny, maxy = (min(ys), max(ys)) if ys else (0.0, 1.0)
+                spanx = max(1e-9, maxx - minx)
+                spany = max(1e-9, maxy - miny)
+                pad = 20
+                y_down = bool(data.get('y_down', True))
+                # Preserve aspect ratio by using a single scale (letterbox)
+                sx = (w - 2*pad) / spanx
+                sy = (h - 2*pad) / spany
+                s = min(sx, sy)
+                ox = (w - s*spanx) * 0.5
+                oy = (h - s*spany) * 0.5
+                def _to_canvas(x: float, y: float) -> tuple[float, float]:
+                    nx = ox + s * (x - minx)
+                    if y_down:
+                        ny = oy + s * (y - miny)
+                    else:
+                        ny = oy + s * (maxy - y)
+                    return nx, ny
+
+                coords_px: dict[str, tuple[float, float]] = {}
+                for n, (ux, uy) in coords_unit.items():
+                    coords_px[n] = _to_canvas(ux, uy)
+
+                # Precompute canvas-space polylines
+                polylines_px: dict[str, list[list[tuple[float, float]]]] = {}
+                try:
+                    for k, plist in polylines_unit.items():
+                        out_list: list[list[tuple[float, float]]] = []
+                        for pts in plist:
+                            out_list.append([_to_canvas(px, py) for (px, py) in pts])
+                        if out_list:
+                            polylines_px[k] = out_list
+                except Exception:
+                    pass
+
+                # Snap polyline endpoints to node anchors with tolerance in pixel space
+                try:
+                    tol = max(w, h) * 0.004  # ~0.4% of canvas
+                    tol2 = tol * tol
+                    max_snap_from = 0.0; max_snap_to = 0.0
+                    for k, plist in list(polylines_px.items()):
+                        try:
+                            u, v = k.split('|', 1)
+                        except Exception:
+                            continue
+                        au = coords_px.get(u); av = coords_px.get(v)
+                        if not plist or (au is None and av is None):
+                            continue
+                        for pts in plist:
+                            if not pts:
+                                continue
+                            # snap first to u, last to v when close
+                            if au is not None:
+                                dx = pts[0][0] - au[0]; dy = pts[0][1] - au[1]
+                                if dx*dx + dy*dy <= tol2:
+                                    d = (dx*dx + dy*dy) ** 0.5
+                                    if d > max_snap_from: max_snap_from = d
+                                    pts[0] = au
+                            if av is not None:
+                                dx = pts[-1][0] - av[0]; dy = pts[-1][1] - av[1]
+                                if dx*dx + dy*dy <= tol2:
+                                    d = (dx*dx + dy*dy) ** 0.5
+                                    if d > max_snap_to: max_snap_to = d
+                                    pts[-1] = av
+                except Exception:
+                    pass
+
+                # If no anchors and no polylines, overlay a fallback notice
+                try:
+                    diag = data.get('diag') if isinstance(data, dict) else None
+                    if isinstance(diag, dict) and (diag.get('anchors', 0) == 0) and (diag.get('poly_sections', 0) == 0):
+                        cv.create_text(10, 10, text='No diagram geometry — fallback layout', anchor='nw', fill=self.COL.get('TEXT', '#334155'))
+                    # Log snap distances summary
+                    if isinstance(diag, dict):
+                        self._append_log(f"Snap dists — from≈{max_snap_from:.2f}px, to≈{max_snap_to:.2f}px")
+                        self._append_log(f"Canvas scale s={s:.3f}, letterbox=({ox:.1f},{oy:.1f}), bbox=[{minx:.3f}..{maxx:.3f}]x[{miny:.3f}..{maxy:.3f}] flip_y={y_down}")
+                except Exception:
+                    pass
+
+                edge_color = self.COL.get('MUTED', '#94A3B8')
+                _draw_count = 0
+                for (u, v) in edges:
+                    if u in coords_px and v in coords_px:
+                        x1, y1 = coords_px[u]; x2, y2 = coords_px[v]
+                        k = "|".join(sorted((u, v)))
+                        if k in polylines_px:
+                            for pts in polylines_px[k]:
+                                # Orient roughly towards u->v
+                                first_end = None
+                                try:
+                                    if pts:
+                                        d_u = (pts[0][0]-x1)**2 + (pts[0][1]-y1)**2
+                                        d_v = (pts[0][0]-x2)**2 + (pts[0][1]-y2)**2
+                                        first_end = 'u' if d_u <= d_v else 'v'
+                                except Exception:
+                                    pass
+                                seq: list[tuple[float, float]] = [coords_px[u]] + (list(reversed(pts)) if first_end == 'v' else pts) + [coords_px[v]]
+                                flat: list[float] = []
+                                for (px, py) in seq:
+                                    flat.extend([px, py])
+                                cv.create_line(*flat, fill=edge_color, width=1)
+                                _draw_count += 1
+                                if _draw_count % 200 == 0:
+                                    try:
+                                        cv.update()
+                                    except Exception:
+                                        pass
+                        else:
+                            cv.create_line(x1, y1, x2, y2, fill=edge_color, width=1)
+                            _draw_count += 1
+                            if _draw_count % 200 == 0:
+                                try:
+                                    cv.update()
+                                except Exception:
+                                    pass
+
+                # Devices (precomputed in data) ---------------------------------
+                # Build helper to get a representative path per edge
+                def _path_for_edge(u: str, v: str) -> list[tuple[float, float]]:
+                    k = "|".join(sorted((u, v)))
+                    pts_variants = polylines_px.get(k)
+                    if pts_variants:
+                        pts = pts_variants[0]
+                        try:
+                            ux, uy = coords_px[u]; vx, vy = coords_px[v]
+                            if pts:
+                                d_u = (pts[0][0]-ux)**2 + (pts[0][1]-uy)**2
+                                d_v = (pts[0][0]-vx)**2 + (pts[0][1]-vy)**2
+                                if d_u > d_v:
+                                    pts = list(reversed(pts))
+                        except Exception:
+                            pass
+                        return [coords_px[u]] + list(pts) + [coords_px[v]]
+                    return [coords_px[u], coords_px[v]]
+
+                def _line_point_at_fraction(pts: list[tuple[float, float]], t: float) -> tuple[float, float, float, float, float, float]:
+                    if t < 0.0: t = 0.0
+                    if t > 1.0: t = 1.0
+                    import math
+                    total = 0.0
+                    seglen: list[float] = []
+                    for i in range(len(pts)-1):
+                        x0,y0 = pts[i]; x1_,y1_ = pts[i+1]
+                        L = math.hypot(x1_-x0, y1_-y0)
+                        seglen.append(L); total += L
+                    if total <= 1e-9:
+                        x,y = pts[0]
+                        return x,y,1.0,0.0,0.0,-1.0
+                    target = t * total
+                    acc = 0.0
+                    for i in range(len(pts)-1):
+                        L = seglen[i]
+                        x0,y0 = pts[i]; x1_,y1_ = pts[i+1]
+                        if acc + L >= target or i == len(pts)-2:
+                            u = 0.0 if L <= 1e-9 else (target - acc) / L
+                            x = x0 + u * (x1_-x0)
+                            y = y0 + u * (y1_-y0)
+                            tx = 1.0 if L <= 1e-9 else (x1_-x0)/L
+                            ty = 0.0 if L <= 1e-9 else (y1_-y0)/L
+                            nx = -ty; ny = tx
+                            return x,y,tx,ty,nx,ny
+                        acc += L
+                    x,y = pts[-1]
+                    return x,y,1.0,0.0,0.0,-1.0
+
+                # Device data
+                bus_sources = set(data.get('bus_sources') or [])
+                bus_loads = dict(data.get('bus_loads') or {})
+                bus_shunts = dict(data.get('bus_shunts') or {})
+                inline_devs = dict(data.get('inline_devs') or {})
+
+                # Glyphs using theme colors
+                def draw_switch_at(x: float, y: float, nx: float, ny: float, size: float = 5.0):
+                    px = nx * size; py = ny * size
+                    cv.create_line(x - px, y - py, x + px, y + py, fill=self.COL.get('TEXT', '#334155'), width=2)
+                def draw_xfmr_at(x: float, y: float, nx: float, ny: float, r: float = 3.0, gap: float = 3.0):
+                    px = nx * gap; py = ny * gap
+                    for sx, sy in ((x - px, y - py), (x + px, y + py)):
+                        cv.create_oval(sx - r, sy - r, sx + r, sy + r, outline=self.COL.get('ACCENT', '#7C3AED'), fill=self.COL.get('ACCENT_SOFT', '#EDE9FE'), width=1.5)
+                def draw_load_near_bus(x: float, y: float, idx: int):
+                    off = 10 + idx * 8; s = 4
+                    cv.create_rectangle(x + off - s, y - s, x + off + s, y + s, outline=self.COL.get('TEXT', '#334155'), fill=self.COL.get('ACCENT_SOFT', '#EDE9FE'))
+                def draw_shunt_near_bus(x: float, y: float, idx: int):
+                    base = 10 + idx * 10; top = y - base - 4; bot = y - base + 4; cxm = x - 4; cxp = x + 4
+                    cv.create_line(cxm, top, cxm, bot, fill=self.COL.get('TEXT', '#334155'), width=2)
+                    cv.create_line(cxp, top, cxp, bot, fill=self.COL.get('TEXT', '#334155'), width=2)
+                    cv.create_line(cxm, bot, cxp, bot, fill=self.COL.get('TEXT', '#334155'), width=1)
+                def draw_source_near_bus(x: float, y: float):
+                    x = x - 12; r = 6
+                    cv.create_oval(x - r, y - r, x + r, y + r, outline=self.COL.get('DANGER', '#EF4444'), width=2)
+                    bolt = [(x-1, y-3), (x+1, y-3), (x-1, y+1), (x+1, y+1)]
+                    cv.create_polygon(bolt, fill=self.COL.get('DANGER', '#EF4444'))
+
+                # Inline devices along edge paths
+                for k, devs_for_edge in inline_devs.items():
+                    try:
+                        u, v = k.split('|', 1)
+                    except Exception:
+                        continue
+                    if u not in coords_px or v not in coords_px:
+                        continue
+                    path_pts = _path_for_edge(u, v)
+                    loc_to_t = {'from': 0.2, 'middle': 0.5, 'to': 0.8}
+                    stack = 0
+                    for d in devs_for_edge:
+                        loc = (d.get('loc') or 'middle').lower()
+                        t = loc_to_t.get(loc, 0.5)
+                        x, y, tx, ty, nx, ny = _line_point_at_fraction(path_pts, t)
+                        off = (stack % 3 - 1) * 6.0
+                        sx = x + nx * off; sy = y + ny * off
+                        if d.get('type') == 'switch':
+                            draw_switch_at(sx, sy, nx, ny)
+                        elif d.get('type') == 'xfmr':
+                            draw_xfmr_at(sx, sy, nx, ny)
+                        stack += 1
+
+                # Bus-attached devices
+                for b, cnt in bus_loads.items():
+                    if b in coords_px:
+                        x, y = coords_px[b]
+                        for i in range(cnt):
+                            draw_load_near_bus(x, y, i)
+                for b, cnt in bus_shunts.items():
+                    if b in coords_px:
+                        x, y = coords_px[b]
+                        for i in range(cnt):
+                            draw_shunt_near_bus(x, y, i)
+                for b in sorted(bus_sources):
+                    if b in coords_px:
+                        x, y = coords_px[b]
+                        draw_source_near_bus(x, y)
+
+                # Draw nodes
+                node_fill = self.COL.get('CARD', '#FFFFFF')
+                node_stroke = self.COL.get('TEXT', '#334155')
+                try:
+                    ctx = get_island_context() or {}
+                    slack_per_island: dict[int, str] = dict(ctx.get('slack_per_island', {}))
+                    slack = slack_per_island.get(isl)
+                except Exception:
+                    slack = None
+                for n, (x, y) in coords_px.items():
+                    r = 3 if n != slack else 5
+                    cv.create_oval(x - r, y - r, x + r, y + r, fill=node_fill, outline=node_stroke, width=1.5)
+
+                # Scrollregion + center
+                try:
+                    bbox = cv.bbox('all')
+                    if bbox:
+                        x1, y1, x2, y2 = bbox
+                        margin = 20
+                        cv.configure(scrollregion=(x1 - margin, y1 - margin, x2 + margin, y2 + margin))
+                        cx = (x1 + x2) / 2.0; cy = (y1 + y2) / 2.0
+                        dx = (w / 2.0) - cx; dy = (h / 2.0) - cy
+                        cv.move('all', dx, dy)
+                        self._map_fitted = True
+                except Exception:
+                    pass
+                return
+            except Exception:
+                # fall through to legacy path
+                pass
+
+        # Fallback to legacy synchronous drawer if precomputed data missing
+        try:
+            isl = data.get("isl")
+            bus_to_island = data.get("bus_to_island") or {}
+            if not isinstance(bus_to_island, dict):
+                bus_to_island = {}
+            self._draw_island_map(isl, bus_to_island)
+        except Exception:
+            try:
+                if hasattr(self, 'island_map') and self.island_map is not None:
+                    self.island_map.delete('all')
+            except Exception:
+                pass
+
+    def _draw_island_map(self, isl: int | None, bus_to_island: dict[str, int]):
+        if not hasattr(self, 'island_map') or self.island_map is None:
+            return
+        cv = self.island_map
+        cv.delete('all')
+        w = max(100, int(cv.winfo_width() or 0))
+        h = max(100, int(cv.winfo_height() or 0))
+
+        # Gather island nodes
+        if isl is None:
+            # Nothing selected
+            return
+        nodes = sorted([b for b, i in bus_to_island.items() if i == isl])
+        if not nodes:
+            return
+
+        # Build adjacency from the input file, then subgraph to selected island
+        try:
+            from Modules.IslandChecker import _read_xml as _is_read_xml  # type: ignore
+            from Modules.IslandChecker import _build_graph as _is_build_graph  # type: ignore
+            in_path = Path(self.in_path.get() or "").expanduser()
+            root = _is_read_xml(in_path)
+            adj_full, _, _ = _is_build_graph(root)
+        except Exception:
+            adj_full = {n: set() for n in nodes}
+
+        adj = {n: set(v for v in adj_full.get(n, set()) if v in nodes) for n in nodes}
+
+        # Try to collect real coordinates (best-effort, optional)
+        coords_real: dict[str, tuple[float, float]] = {}
+        # Optional polylines for sections with bends (IntermediatePoints)
+        # Map undirected edge key -> list of {from, to, pts[(x,y), ...]}
+        section_polylines: dict[frozenset[str], list[dict[str, Any]]] = {}
+        try:
+            import xml.etree.ElementTree as ET
+            from Modules.General import safe_name as _safe
+            def _num(x: str | None) -> float | None:
+                try:
+                    return float(x) if x not in (None, "") else None
+                except Exception:
+                    return None
+            def _is_zero_xy(x: float | None, y: float | None) -> bool:
+                try:
+                    return bool(x is not None and y is not None and abs(x) == 0.0 and abs(y) == 0.0)
+                except Exception:
+                    return False
+            # Gather coordinates from two sources:
+            #  1) Any element that has NodeID + X/Y (node-centric coords)
+            #  2) Sections with From*/To* X/Y (endpoint coords)
+            #  3) Sections with IntermediatePoints for bends (polyline)
+            in_path = Path(self.in_path.get() or "").expanduser()
+            root = ET.fromstring(in_path.read_text(encoding='utf-8', errors='ignore'))
+            # 1) Node-centric coords
+            for elem in root.iter():
+                nid_raw = (elem.findtext('NodeID') or '').strip()
+                if not nid_raw:
+                    continue
+                nx = _num(elem.findtext('X') or elem.findtext('Longitude'))
+                ny = _num(elem.findtext('Y') or elem.findtext('Latitude'))
+                # Skip (0,0) to avoid visual blow-ups
+                if nx is not None and ny is not None and not _is_zero_xy(nx, ny):
+                    nid = _safe(nid_raw)
+                    if nid:
+                        coords_real.setdefault(nid, (nx, ny))
+            # 2) Section endpoint coords
+            for sec in root.findall('.//Sections/Section'):
+                fb_raw = (sec.findtext('FromNodeID') or '').strip(); tb_raw = (sec.findtext('ToNodeID') or '').strip()
+                fb = _safe(fb_raw) if fb_raw else ''
+                tb = _safe(tb_raw) if tb_raw else ''
+                # Collect all tag/text pairs under the section
+                kv: dict[str, str] = {}
+                for elem in sec.iter():
+                    tag = elem.tag.split('}')[-1].lower()
+                    txt = (elem.text or '').strip()
+                    if txt:
+                        kv[tag] = txt
+                    for ak, av in elem.attrib.items():
+                        k2 = f"{tag}.{ak}".lower()
+                        if av and k2 not in kv:
+                            kv[k2] = av
+                def pick(prefixes: list[str]) -> tuple[float | None, float | None]:
+                    x_val = None; y_val = None
+                    keys = list(kv.keys())
+                    # Prefer explicit longitude/latitude
+                    for k in keys:
+                        lk = k.replace('_','').replace('-','')
+                        if any(px in lk for px in prefixes):
+                            if any(ax in lk for ax in ['long','lon']):
+                                xv = _num(kv[k]);
+                                if xv is not None: x_val = xv
+                            if 'lat' in lk:
+                                yv = _num(kv[k]);
+                                if yv is not None: y_val = yv
+                    # Generic X/Y for the given endpoint
+                    if x_val is None:
+                        for k in keys:
+                            lk = k.replace('_','').replace('-','')
+                            if any(px in lk for px in prefixes) and any(ax in lk for ax in ['x','xcoord','xcoordinate','posx','positionx','xpos']):
+                                xv = _num(kv[k]);
+                                if xv is not None: x_val = xv; break
+                    if y_val is None:
+                        for k in keys:
+                            lk = k.replace('_','').replace('-','')
+                            if any(px in lk for px in prefixes) and any(ay in lk for ay in ['y','ycoord','ycoordinate','posy','positiony','ypos']):
+                                yv = _num(kv[k]);
+                                if yv is not None: y_val = yv; break
+                    # Last resort: plain X/Y at section scope
+                    if x_val is None:
+                        x_val = _num(kv.get('x'))
+                    if y_val is None:
+                        y_val = _num(kv.get('y'))
+                    return x_val, y_val
+                fx, fy = pick(['from'])
+                tx, ty = pick(['to'])
+                if fb and fb in nodes and fx is not None and fy is not None and not _is_zero_xy(fx, fy):
+                    coords_real.setdefault(fb, (fx, fy))
+                if tb and tb in nodes and tx is not None and ty is not None and not _is_zero_xy(tx, ty):
+                    coords_real.setdefault(tb, (tx, ty))
+
+                # 3) Polyline (IntermediatePoints) — record bends only, never draw nodes on bends
+                try:
+                    ip_elem = sec.find('IntermediatePoints')
+                    if ip_elem is not None and fb and tb:
+                        pts: list[tuple[float, float]] = []
+                        for p in ip_elem.findall('Point'):
+                            px = _num((p.findtext('X') or '').strip())
+                            py = _num((p.findtext('Y') or '').strip())
+                            if px is None or py is None:
+                                continue
+                            if _is_zero_xy(px, py):
+                                continue
+                            pts.append((px, py))
+                        if pts:
+                            key = frozenset({fb, tb})
+                            section_polylines.setdefault(key, []).append({'from': fb, 'to': tb, 'pts': pts})
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # Allow UI to process events so spinner animates between heavy phases
+        try:
+            cv.update_idletasks()
+        except Exception:
+            pass
+
+        # Always generate a fallback layered one-line diagram (columns by BFS depth)
+        ctx = get_island_context() or {}
+        slack_per_island: dict[int, str] = dict(ctx.get('slack_per_island', {}))
+        root_node = slack_per_island.get(isl) or (nodes[0] if nodes else None)
+        from collections import deque as _dq
+        depth: dict[str, int] = {}
+        if root_node:
+            q = _dq([root_node]); depth[root_node] = 0
+            while q:
+                u = q.popleft()
+                for v in sorted(adj.get(u, set())):
+                    if v not in depth:
+                        depth[v] = depth[u] + 1
+                        q.append(v)
+        for n in nodes:
+            depth.setdefault(n, 0)
+        columns: dict[int, list[str]] = {}
+        for n in nodes:
+            columns.setdefault(depth[n], []).append(n)
+        for col in columns.values():
+            col.sort()
+        coords_bfs: dict[str, tuple[float, float]] = {}
+        for dlevel, col_nodes in columns.items():
+            k = max(1, len(col_nodes))
+            for i, n in enumerate(col_nodes):
+                x = float(dlevel)
+                y = float(i) / float(k - 1 if k > 1 else 1)
+                coords_bfs[n] = (x, y)
+        # Normalize BFS x-depth to unit [0..1] so it blends well with real XY that
+        # we also scale to unit space; prevents UTM-vs-depth scale clashes.
+        try:
+            dmax = max((xy[0] for xy in coords_bfs.values()), default=1.0)
+            if dmax <= 0:
+                dmax = 1.0
+            for n, (x, y) in list(coords_bfs.items()):
+                coords_bfs[n] = (x / dmax, y)
+        except Exception:
+            pass
+
+        # Merge with scale separation: real-world coords are first normalized to unit space
+        # using only the real-coord extent, so BFS (0..1) doesn't get crushed by UTM-scale values.
+        if coords_real:
+            xsr = [p[0] for p in coords_real.values()]
+            ysr = [p[1] for p in coords_real.values()]
+            minxr, maxxr = min(xsr), max(xsr)
+            minyr, maxyr = min(ysr), max(ysr)
+            spanxr = max(1.0, maxxr - minxr)
+            spanyr = max(1.0, maxyr - minyr)
+            def _norm_real_to_unit(x: float, y: float) -> tuple[float, float]:
+                return (x - minxr) / spanxr, (y - minyr) / spanyr
+            coords_real_unit = {n: _norm_real_to_unit(x, y) for n, (x, y) in coords_real.items()}
+        else:
+            coords_real_unit = {}
+
+        # Unit-space coords for all nodes: start with BFS, override with any real
+        coords_unit: dict[str, tuple[float, float]] = dict(coords_bfs)
+        for n, xy in coords_real_unit.items():
+            coords_unit[n] = xy
+        # If a node lacks real coords but is adjacent to nodes that have them,
+        # pull it toward the average of its real-neighbor positions with tiny jitter.
+        try:
+            import math as _m
+            for n in nodes:
+                if n in coords_real_unit:
+                    continue
+                neigh_u = [coords_real_unit[v] for v in adj.get(n, set()) if v in coords_real_unit]
+                if not neigh_u:
+                    continue
+                ax = sum(x for x, _ in neigh_u) / float(len(neigh_u))
+                ay = sum(y for _, y in neigh_u) / float(len(neigh_u))
+                # stable tiny jitter from hash to avoid overplotting
+                h = hash(n)
+                jx = ((h & 0x3F) / 63.0 - 0.5) * 0.02  # +/-0.01
+                jy = (((h >> 6) & 0x3F) / 63.0 - 0.5) * 0.02
+                coords_unit[n] = (ax + jx, ay + jy)
+        except Exception:
+            pass
+
+        # Allow UI to process events before mapping to canvas
+        try:
+            cv.update_idletasks()
+        except Exception:
+            pass
+
+        # Now normalize unit-space coords to canvas space; include polylines with real coords also normalized to unit first
+        xs = [p[0] for p in coords_unit.values()]
+        ys = [p[1] for p in coords_unit.values()]
+        # Include normalized polylines' points in bounds (even if endpoints lack node coords)
+        polylines_unit: dict[frozenset[str], list[list[tuple[float, float]]]] = {}
+        try:
+            for key, plist in section_polylines.items():
+                out_list: list[list[tuple[float, float]]] = []
+                for poly in plist:
+                    pts_raw = poly.get('pts', [])
+                    pts_u = [(_norm_real_to_unit(px, py) if coords_real else (px, py)) for (px, py) in pts_raw]
+                    out_list.append(pts_u)
+                    for (ux, uy) in pts_u:
+                        xs.append(ux); ys.append(uy)
+                if out_list:
+                    polylines_unit[key] = out_list
+        except Exception:
+            pass
+
+        minx, maxx = (min(xs), max(xs)) if xs else (0.0, 1.0)
+        miny, maxy = (min(ys), max(ys)) if ys else (0.0, 1.0)
+        spanx = max(1e-6, maxx - minx)
+        spany = max(1e-6, maxy - miny)
+        pad = 20
+        def _to_canvas(x: float, y: float) -> tuple[float, float]:
+            nx = pad + (x - minx) / spanx * (w - 2*pad)
+            ny = pad + (y - miny) / spany * (h - 2*pad)
+            return nx, ny
+        coords: dict[str, tuple[float, float]] = {}
+        for n, (x, y) in coords_unit.items():
+            coords[n] = _to_canvas(x, y)
+
+        # Precompute canvas-space polylines for edges with bends
+        polylines_norm: dict[frozenset[str], list[list[tuple[float, float]]]] = {}
+        try:
+            for key, plist in polylines_unit.items():
+                out_list: list[list[tuple[float, float]]] = []
+                for pts_u in plist:
+                    out_list.append([_to_canvas(px, py) for (px, py) in pts_u])
+                if out_list:
+                    polylines_norm[key] = out_list
+        except Exception:
+            pass
+
+        # Draw edges (tick UI periodically so spinner keeps animating)
+        edge_color = self.COL.get('MUTED', '#94A3B8')
+        _draw_count = 0
+        for u in nodes:
+            for v in adj.get(u, set()):
+                if u < v and u in coords and v in coords:
+                    key = frozenset({u, v})
+                    x1, y1 = coords[u]; x2, y2 = coords[v]
+                    # If we have a polyline for this edge, draw the bend(s)
+                    if key in polylines_norm:
+                        for pts in polylines_norm[key]:
+                            # Determine orientation: the stored section may be fb->tb or tb->fb
+                            # We only reverse the bend points if needed to keep u->v order consistent visually
+                            first_end = None
+                            try:
+                                if pts:
+                                    d_u = (pts[0][0]-x1)**2 + (pts[0][1]-y1)**2
+                                    d_v = (pts[0][0]-x2)**2 + (pts[0][1]-y2)**2
+                                    first_end = 'u' if d_u <= d_v else 'v'
+                            except Exception:
+                                pass
+                            seq: list[tuple[float, float]] = []
+                            if first_end == 'v':
+                                seq = [coords[u]] + list(reversed(pts)) + [coords[v]]
+                            else:
+                                seq = [coords[u]] + pts + [coords[v]]
+                            flat: list[float] = []
+                            for (px, py) in seq:
+                                flat.extend([px, py])
+                            cv.create_line(*flat, fill=edge_color, width=1)
+                            _draw_count += 1
+                            if _draw_count % 200 == 0:
+                                try:
+                                    cv.update_idletasks()
+                                except Exception:
+                                    pass
+                    else:
+                        cv.create_line(x1, y1, x2, y2, fill=edge_color, width=1)
+                        _draw_count += 1
+                        if _draw_count % 200 == 0:
+                            try:
+                                cv.update_idletasks()
+                            except Exception:
+                                pass
+
+        # ---- Device glyphs (CYME-like) -------------------------------------
+        # We draw:
+        #  - Voltage source(s): at source buses (from Substation Topo) inside this island
+        #  - Shunts + Loads: attached to buses (placed next to the bus circle)
+        #  - Switches + Transformers: inline on sections (at From/Middle/To along the path)
+        #
+        # Parsing is best-effort; if anything fails we skip gracefully.
+        try:
+            import xml.etree.ElementTree as ET
+            from Modules.General import safe_name as _safe
+            in_path = Path(self.in_path.get() or "").expanduser()
+            xml_root = ET.fromstring(in_path.read_text(encoding='utf-8', errors='ignore'))
+
+            nodes_set = set(nodes)
+
+            # Find source buses from Substation Topo
+            vs_nodes: set[str] = set()
+            for topo in xml_root.findall('.//Topo'):
+                ntype = (topo.findtext('NetworkType') or '').strip().lower()
+                eq_mode = (topo.findtext('EquivalentMode') or '').strip()
+                if ntype != 'substation' or eq_mode == '1':
+                    continue
+                srcs = topo.find('./Sources')
+                if srcs is None:
+                    continue
+                for src in srcs.findall('./Source'):
+                    nid = _safe(src.findtext('SourceNodeID') or '')
+                    if nid:
+                        vs_nodes.add(nid)
+
+            # Bus-attached devices: count per bus for placement offsets
+            bus_loads: dict[str, int] = {}
+            bus_shunts: dict[str, int] = {}
+            bus_sources: set[str] = set()
+
+            # Inline devices per undirected edge key
+            inline_devs: dict[frozenset[str], list[dict[str, Any]]] = {}
+
+            # Helper to add inline device record
+            def add_inline(dev_type: str, fb: str, tb: str, loc: str | None = None) -> None:
+                if not fb or not tb:
+                    return
+                if fb not in nodes_set or tb not in nodes_set:
+                    return
+                key = frozenset({fb, tb})
+                inline_devs.setdefault(key, []).append({
+                    'type': dev_type,
+                    'from': fb,
+                    'to': tb,
+                    'loc': (loc or 'middle').lower()
+                })
+
+            # Populate bus-attached and inline devices by scanning sections
+            for sec in xml_root.findall('.//Sections/Section'):
+                fb = _safe((sec.findtext('FromNodeID') or '').strip())
+                tb = _safe((sec.findtext('ToNodeID') or '').strip())
+                if not fb or not tb:
+                    continue
+                # Restrict to selected island endpoints
+                if (fb not in nodes_set) and (tb not in nodes_set):
+                    continue
+
+                devs = sec.find('./Devices')
+                if devs is None:
+                    continue
+
+                # Loads (Spot + Distributed) attach to From bus per sheet rules
+                if devs.find('SpotLoad') is not None or devs.find('DistributedLoad') is not None:
+                    if fb in nodes_set:
+                        bus_loads[fb] = bus_loads.get(fb, 0) + 1
+
+                # Shunt (Capacitor/Reactor) attach to From bus per sheet rules
+                if devs.find('ShuntCapacitor') is not None or devs.find('ShuntReactor') is not None:
+                    if fb in nodes_set:
+                        bus_shunts[fb] = bus_shunts.get(fb, 0) + 1
+
+                # Switch-like devices inline. Consider Location tag for approximate placement.
+                for tag in ('Switch', 'Sectionalizer', 'Breaker', 'Fuse', 'Recloser'):
+                    for d in devs.findall(tag):
+                        loc = (d.findtext('Location') or 'Middle')
+                        add_inline('switch', fb, tb, loc)
+                # Some Miscellaneous codes behave as inline switches
+                for d in devs.findall('Miscellaneous'):
+                    did = ((d.findtext('DeviceID') or '').strip().upper())
+                    if did in {'RB', 'LA'}:
+                        loc = (d.findtext('Location') or 'Middle')
+                        add_inline('switch', fb, tb, loc)
+
+                # Transformers inline
+                if devs.find('Transformer') is not None or devs.find('Regulator') is not None:
+                    loc = 'Middle'
+                    # if a Location field exists under Transformer, use it
+                    xf = devs.find('Transformer')
+                    if xf is not None:
+                        loc = (xf.findtext('Location') or 'Middle')
+                    add_inline('xfmr', fb, tb, loc)
+
+            # Sources on buses for this island only
+            for b in vs_nodes:
+                if b in nodes_set:
+                    bus_sources.add(b)
+
+            # ---- Drawing helpers -------------------------------------------
+            def line_point_at_fraction(pts: list[tuple[float, float]], t: float) -> tuple[float, float, float, float, float, float]:
+                # clamp t
+                if t < 0.0:
+                    t = 0.0
+                if t > 1.0:
+                    t = 1.0
+                # total length
+                import math
+                segs: list[tuple[float,float,float,float,float]] = []  # (x0,y0,x1,y1,len)
+                total = 0.0
+                for i in range(len(pts)-1):
+                    x0,y0 = pts[i]; x1,y1 = pts[i+1]
+                    dx = x1-x0; dy = y1-y0
+                    L = math.hypot(dx, dy)
+                    if L <= 1e-6:
+                        continue
+                    segs.append((x0,y0,x1,y1,L))
+                    total += L
+                if total <= 0.0:
+                    # fallback: first point
+                    x,y = pts[0]
+                    return x,y, 1.0,0.0, 0.0,1.0
+                target = t * total
+                acc = 0.0
+                for (x0,y0,x1,y1,L) in segs:
+                    if acc + L >= target:
+                        remain = target - acc
+                        f = remain / L if L > 0 else 0.0
+                        x = x0 + f * (x1 - x0)
+                        y = y0 + f * (y1 - y0)
+                        tx = (x1 - x0) / L
+                        ty = (y1 - y0) / L
+                        nx = -ty
+                        ny = tx
+                        return x,y, tx,ty, nx,ny
+                    acc += L
+                # if we fall through, return end of last
+                x0,y0,x1,y1,L = segs[-1]
+                tx = (x1 - x0) / L
+                ty = (y1 - y0) / L
+                return x1,y1, tx,ty, -ty,tx
+
+            def draw_switch_at(x: float, y: float, nx: float, ny: float, size: float = 5.0):
+                # small bar across the conductor (perpendicular)
+                px = nx * size
+                py = ny * size
+                cv.create_line(x - px, y - py, x + px, y + py, fill=self.COL.get('TEXT', '#334155'), width=2)
+
+            def draw_xfmr_at(x: float, y: float, nx: float, ny: float, r: float = 3.0, gap: float = 3.0):
+                # two small circles offset along normal
+                px = nx * gap; py = ny * gap
+                for sx, sy in ((x - px, y - py), (x + px, y + py)):
+                    cv.create_oval(sx - r, sy - r, sx + r, sy + r, outline=self.COL.get('ACCENT', '#7C3AED'), fill=self.COL.get('ACCENT_SOFT', '#EDE9FE'), width=1.5)
+
+            def draw_load_near_bus(x: float, y: float, idx: int):
+                # small square to the right, stacked
+                off = 10 + idx * 8
+                s = 4
+                cv.create_rectangle(x + off - s, y - s, x + off + s, y + s, outline=self.COL.get('TEXT', '#334155'), fill=self.COL.get('ACCENT_SOFT', '#EDE9FE'))
+
+            def draw_shunt_near_bus(x: float, y: float, idx: int):
+                # capacitor symbol above the bus, stacked upward
+                base = 10 + idx * 10
+                top = y - base - 4
+                bot = y - base + 4
+                cxm = x - 4; cxp = x + 4
+                cv.create_line(cxm, top, cxm, bot, fill=self.COL.get('TEXT', '#334155'), width=2)
+                cv.create_line(cxp, top, cxp, bot, fill=self.COL.get('TEXT', '#334155'), width=2)
+                cv.create_line(cxm, bot, cxp, bot, fill=self.COL.get('TEXT', '#334155'), width=1)
+
+            def draw_source_near_bus(x: float, y: float):
+                # offset to the left of bus circle to avoid overlap
+                x = x - 12
+                r = 6
+                cv.create_oval(x - r, y - r, x + r, y + r, outline=self.COL.get('DANGER', '#EF4444'), width=2)
+                # small lightning bolt inside
+                bolt = [(x-1, y-3), (x+1, y-3), (x-1, y+1), (x+1, y+1)]
+                cv.create_polygon(bolt, fill=self.COL.get('DANGER', '#EF4444'))
+
+            # Draw inline devices using polylines when available; else straight path
+            for key, dev_list in inline_devs.items():
+                u, v = tuple(key)
+                if u not in coords or v not in coords:
+                    continue
+                # Choose a representative path for this edge
+                path_variants = polylines_norm.get(key)
+                if path_variants and len(path_variants) > 0:
+                    bends = path_variants[0]
+                    path_pts = [coords[u]] + list(bends) + [coords[v]]
+                else:
+                    path_pts = [coords[u], coords[v]]
+
+                # place devices; stack by slight offset along normal
+                loc_to_t = {'from': 0.2, 'middle': 0.5, 'to': 0.8}
+                stack = 0
+                for d in dev_list:
+                    t = loc_to_t.get((d.get('loc') or 'middle'), 0.5)
+                    x, y, tx, ty, nx, ny = line_point_at_fraction(path_pts, t)
+                    # small normal offset to avoid covering the line if multiple
+                    off = (stack % 3 - 1) * 6.0  # -6,0,+6 repeating
+                    sx = x + nx * off
+                    sy = y + ny * off
+                    if d.get('type') == 'switch':
+                        draw_switch_at(sx, sy, nx, ny)
+                    elif d.get('type') == 'xfmr':
+                        draw_xfmr_at(sx, sy, nx, ny)
+                    stack += 1
+
+            # Draw bus devices
+            for b, count in bus_loads.items():
+                if b in coords:
+                    x, y = coords[b]
+                    for i in range(count):
+                        draw_load_near_bus(x, y, i)
+            for b, count in bus_shunts.items():
+                if b in coords:
+                    x, y = coords[b]
+                    for i in range(count):
+                        draw_shunt_near_bus(x, y, i)
+            for b in sorted(bus_sources):
+                if b in coords:
+                    x, y = coords[b]
+                    draw_source_near_bus(x, y)
+
+        except Exception:
+            # Silent failure for glyphs to keep map robust
+            pass
+
+        # Draw nodes
+        node_fill = self.COL.get('ACCENT_SOFT', '#EDE9FE')
+        node_stroke = self.COL.get('ACCENT', '#7C3AED')
+        ctx = get_island_context() or {}
+        slack_per_island: dict[int, str] = dict(ctx.get('slack_per_island', {}))
+        slack = slack_per_island.get(isl)
+        for n, (x, y) in coords.items():
+            # Smaller circles; highlight slack slightly larger
+            r = 3 if n != slack else 5
+            cv.create_oval(x - r, y - r, x + r, y + r, fill=node_fill, outline=node_stroke, width=1.5)
+            # Optional labels for debugging:
+            # cv.create_text(x + r + 2, y, text=n, anchor='w', fill=self.COL.get('TEXT', '#334155'), font=(self.UI_FONT, max(8, self.UI_SIZE-3)))
+        # Update scroll region and center content initially
+        try:
+            bbox = cv.bbox('all')
+            if bbox:
+                x1, y1, x2, y2 = bbox
+                # Expand scroll region slightly for nice margins and recentre
+                margin = 20
+                cv.configure(scrollregion=(x1 - margin, y1 - margin, x2 + margin, y2 + margin))
+                cx = (x1 + x2) / 2.0
+                cy = (y1 + y2) / 2.0
+                dx = (w / 2.0) - cx
+                dy = (h / 2.0) - cy
+                cv.move('all', dx, dy)
+                self._map_fitted = True
+        except Exception:
+            pass
+
+    def _on_map_wheel(self, event, delta: int | None = None):
+        """Zoom the island map around the cursor position using mouse wheel."""
+        try:
+            cv = self.island_map
+            if cv is None:
+                return
+            d = delta if delta is not None else getattr(event, 'delta', 0)
+            if d == 0:
+                return
+            # Typical delta is +/-120 on Windows; scale factor per notch
+            factor = 1.1 if d > 0 else (1/1.1)
+            # Use canvas coordinates for stable zooming
+            x = cv.canvasx(event.x)
+            y = cv.canvasy(event.y)
+            cv.scale('all', x, y, factor, factor)
+            # Keep scrollregion in sync so panning works
+            bbox = cv.bbox('all')
+            if bbox:
+                cv.configure(scrollregion=bbox)
+        except Exception:
+            pass
+
+    # ----- Orthogonal fallback layout/draw (no geometry present) -------------
+    def _draw_island_map_orthogonal(self, data: dict, w: int, h: int) -> None:
+        cv = self.island_map
+        if cv is None:
+            return
+        # Theme colors (single source)
+        COL = self.COL
+        edge_color     = COL.get('EDGE', 'black')
+        text_color     = COL.get('TEXT', '#222')
+        bus_fill       = COL.get('BUS', '#7ca5ff')
+        source_fill    = COL.get('SOURCE', '#ff6961')
+        xfr_fill       = COL.get('TRANSFORMER', '#8fd694')
+        switch_fill    = COL.get('SWITCH', '#f7b267')
+        load_fill      = COL.get('LOAD', '#b0b0b0')
+        shunt_fill     = COL.get('SHUNT', '#7dcfb6')
+        select_outline = COL.get('SELECT', '#6a0dad')
+        bg_color       = COL.get('CANVAS_BG', '#ffffff')
+
+        # Constants
+        DX = 140; DY = 120; MARGIN = 40
+        BUS_R = 6; SRC_R = 10
+        SYMB_W, SYMB_H = 18, 12
+
+        # Metadata and event bindings
+        if not hasattr(self, 'meta'):
+            self.meta = {}
+        def tag_and_meta(item_id: int, typ: str, obj_id: str, name: str) -> None:
+            try:
+                cv.addtag_withtag('obj', item_id)
+                cv.addtag_withtag(f'type:{typ}', item_id)
+                cv.addtag_withtag(f'id:{obj_id}', item_id)
+                self.meta[item_id] = {"type": typ, "id": obj_id, "name": name}
+            except Exception:
+                pass
+        # Bind once
+        try:
+            if not getattr(self, '_obj_binds', False):
+                cv.tag_bind('obj', '<Button-1>', self._on_obj_click)
+                cv.tag_bind('obj', '<Enter>', self._on_obj_hover_enter)
+                cv.tag_bind('obj', '<Leave>', self._on_obj_hover_leave)
+                self._obj_binds = True
+        except Exception:
+            pass
+
+        # Build node set and adjacency
+        edges = list(data.get('edges') or [])
+        nodes_set = set()
+        for (u, v) in edges:
+            nodes_set.add(u); nodes_set.add(v)
+        bus_sources = set(data.get('bus_sources') or [])
+        bus_loads = dict(data.get('bus_loads') or {})
+        bus_shunts = dict(data.get('bus_shunts') or {})
+        inline_devs = dict(data.get('inline_devs') or {})  # key "u|v" -> list[{type,loc}]
+
+        adj: dict[str, set[str]] = {n: set() for n in nodes_set}
+        for (u, v) in edges:
+            adj.setdefault(u, set()).add(v)
+            adj.setdefault(v, set()).add(u)
+
+        # Choose trunk path
+        def bfs_far(start: str) -> tuple[str, dict[str, str]]:
+            from collections import deque
+            q = deque([start]); seen = {start}; parent: dict[str, str] = {}
+            last = start
+            while q:
+                u = q.popleft(); last = u
+                for v in adj.get(u, set()):
+                    if v not in seen:
+                        seen.add(v); parent[v] = u; q.append(v)
+            return last, parent
+
+        if bus_sources:
+            root = next(iter(bus_sources & nodes_set), next(iter(nodes_set)) if nodes_set else '')
+        else:
+            root = next(iter(nodes_set)) if nodes_set else ''
+        a, _ = bfs_far(root)
+        b, par = bfs_far(a)
+        # Reconstruct path from a to b
+        path = [b]
+        while path[-1] in par:
+            path.append(par[path[-1]])
+        trunk = list(reversed(path))
+        trunk = [n for n in trunk if n in nodes_set]
+        trunk_set = set(trunk)
+        # If trunk does not include root and root is a source, prepend root
+        if bus_sources and root in nodes_set and root not in trunk_set:
+            trunk = [root] + trunk
+            trunk_set = set(trunk)
+
+        # Assign grid positions
+        gx: dict[str, int] = {}
+        gy: dict[str, int] = {}
+        for i, n in enumerate(trunk):
+            gx[n] = i
+            gy[n] = 0
+
+        # Branch assignment per trunk node
+        visited = set(trunk)
+        side_toggle = -1  # alternate above/below
+        for i, t in enumerate(trunk):
+            # gather branch clusters from neighbors not on trunk
+            neighs = [v for v in adj.get(t, set()) if v not in trunk_set]
+            if not neighs:
+                continue
+            # For each immediate neighbor start a BFS to collect a branch cluster
+            lane_idx = 1
+            for start in neighs:
+                if start in visited:
+                    continue
+                side_toggle *= -1
+                side = side_toggle  # +1 above, -1 below (we'll flip later in mapping)
+                # Alternate lanes ±lane_idx
+                lane_offset = lane_idx
+                lane_idx += 1
+                col = gx[t] + lane_offset
+                from collections import deque
+                q = deque([(start, 1)])  # (node, depth)
+                visited.add(start)
+                gx[start] = col; gy[start] = side * 1
+                while q:
+                    u, d = q.popleft()
+                    for v in adj.get(u, set()):
+                        if v in visited or v in trunk_set:
+                            continue
+                        visited.add(v)
+                        gx[v] = col; gy[v] = side * (d + 1)
+                        q.append((v, d + 1))
+
+        # Any remaining unplaced nodes (cycles etc.) — place near their neighbor's column
+        for n in nodes_set:
+            if n not in gx:
+                # find any neighbor placed
+                nn = next(iter([v for v in adj.get(n, set()) if v in gx]), None)
+                if nn is None:
+                    gx[n] = len(gx); gy[n] = 0
+                else:
+                    gx[n] = gx[nn]
+                    gy[n] = gy[nn] + 1
+
+        # Grid bounds
+        min_gx = min(gx.values()) if gx else 0
+        max_gx = max(gx.values()) if gx else 1
+        min_gy = min(gy.values()) if gy else 0
+        max_gy = max(gy.values()) if gy else 1
+        gw = max(1, max_gx - min_gx)
+        gh = max(1, max_gy - min_gy)
+
+        # Aspect-preserving map from grid to canvas
+        sx = (w - 2*MARGIN) / float(max(1, gw) * DX)
+        sy = (h - 2*MARGIN) / float(max(1, gh) * DY)
+        s = min(sx, sy)
+        ox = (w - s * (gw * DX)) * 0.5
+        oy = (h - s * (gh * DY)) * 0.5
+
+        def to_px(pxg: int, pyg: int) -> tuple[float, float]:
+            # Math Y-up: larger gy goes upward visually; invert for canvas (y-down)
+            x = ox + s * ((pxg - min_gx) * DX)
+            y = oy + s * ((max_gy - pyg) * DY)
+            return x, y
+
+        coords_px: dict[str, tuple[float, float]] = {n: to_px(gx[n], gy[n]) for n in nodes_set}
+
+        # Route edges orthogonally (L-shapes)
+        polylines_px: dict[str, list[tuple[float, float]]] = {}
+        for (u, v) in edges:
+            x1, y1 = coords_px[u]; x2, y2 = coords_px[v]
+            if abs(x1 - x2) < 1e-6 or abs(y1 - y2) < 1e-6:
+                poly = [(x1, y1), (x2, y2)]
+            else:
+                # vertical then horizontal to favor tee look from trunk
+                mid = (x1, y2)
+                poly = [(x1, y1), mid, (x2, y2)]
+            polylines_px["|".join(sorted((u, v)))] = poly
+
+        # Interactive tagging map
+        self._map_meta = {}
+
+        # Draw edges (black)
+        for key, pts in polylines_px.items():
+            flat = []
+            for (x, y) in pts:
+                flat.extend([x, y])
+            item = cv.create_line(*flat, fill=edge_color, width=2)
+            tag_and_meta(item, 'Edge', f'edge:{key}', f'Section {key.replace("|","-")}')
+
+        # Inline devices along first segment from upstream (choose left-most as upstream)
+        def place_on_first_segment(pts: list[tuple[float, float]]) -> tuple[float, float, bool]:
+            if len(pts) < 2:
+                return pts[0][0], pts[0][1], True
+            (x0, y0), (x1, y1) = pts[0], pts[1]
+            hx = (x0 + x1) * 0.5; hy = (y0 + y1) * 0.5
+            horiz = abs(y1 - y0) < abs(x1 - x0)
+            return hx, hy, horiz
+
+        for k, devs in inline_devs.items():
+            pts = polylines_px.get(k)
+            if not pts:
+                continue
+            base_x, base_y, horiz = place_on_first_segment(pts)
+            for idx, d in enumerate(devs):
+                dtype = (d.get('type') or 'switch').lower()
+                # slight offset to avoid overlap when multiple devices
+                off = (idx % 3 - 1) * 8
+                if horiz:
+                    dx, dy = 0, off
+                else:
+                    dx, dy = off, 0
+                x = base_x + dx; y = base_y + dy
+                name = d.get('name') or (('Transformer' if dtype=='xfmr' else 'Switch') + f' {k}')
+                if dtype == 'xfmr':
+                    if horiz:
+                        a = cv.create_oval(x-12, y-6, x-2, y+6, outline=text_color, width=2, fill=xfr_fill)
+                        b = cv.create_oval(x+2, y-6, x+12, y+6, outline=text_color, width=2, fill=xfr_fill)
+                    else:
+                        a = cv.create_oval(x-6, y-12, x+6, y-2, outline=text_color, width=2, fill=xfr_fill)
+                        b = cv.create_oval(x-6, y+2, x+6, y+12, outline=text_color, width=2, fill=xfr_fill)
+                    tag_and_meta(a, 'Transformer', f'xfmr:{k}', name)
+                    tag_and_meta(b, 'Transformer', f'xfmr:{k}', name)
+                    hit = cv.create_rectangle(x-14, y-14, x+14, y+14, outline='', fill='')
+                    tag_and_meta(hit, 'Transformer', f'xfmr:{k}', name)
+                else:
+                    closed = d.get('closed', True)
+                    if horiz:
+                        if closed:
+                            sitem = cv.create_line(x-10, y, x+10, y, fill=switch_fill, width=3)
+                        else:
+                            cv.create_line(x-10, y, x-2, y, fill=switch_fill, width=3)
+                            cv.create_line(x+2, y,  x+10, y, fill=switch_fill, width=3)
+                            sitem = cv.create_line(x-2, y-6, x+2, y+6, fill=switch_fill, width=2)
+                    else:
+                        if closed:
+                            sitem = cv.create_line(x, y-10, x, y+10, fill=switch_fill, width=3)
+                        else:
+                            cv.create_line(x, y-10, x, y-2, fill=switch_fill, width=3)
+                            cv.create_line(x, y+2,  x, y+10, fill=switch_fill, width=3)
+                            sitem = cv.create_line(x-6, y-2, x+6, y+2, fill=switch_fill, width=2)
+                    tag_and_meta(sitem, 'Switch', f'switch:{k}', name)
+                    hit = cv.create_rectangle(x-14, y-14, x+14, y+14, outline='', fill='')
+                    tag_and_meta(hit, 'Switch', f'switch:{k}', name)
+
+        # Draw buses
+        node_fill = bus_fill
+        node_stroke = text_color
+        for n, (x, y) in coords_px.items():
+            r = BUS_R
+            item = cv.create_oval(x - r, y - r, x + r, y + r, fill=node_fill, outline=node_stroke, width=1.5)
+            tag_and_meta(item, 'Bus', f'bus:{n}', n)
+            # Invisible hit box
+            hit = cv.create_rectangle(x-12, y-12, x+12, y+12, outline='', fill='')
+            tag_and_meta(hit, 'Bus', f'bus:{n}', n)
+
+        # Draw bus-attached devices (loads/shunts) and sources
+        for b, cnt in bus_loads.items():
+            if b not in coords_px:
+                continue
+            x, y = coords_px[b]
+            for i in range(cnt):
+                off = 12 + i * 10; s = 6
+                item = cv.create_rectangle(x + off - s, y - s, x + off + s, y + s, outline=text_color, fill=load_fill, width=1)
+                tag_and_meta(item, 'Load', f'load:{b}:{i+1}', f'Load {i+1} @ {b}')
+        for b, cnt in bus_shunts.items():
+            if b not in coords_px:
+                continue
+            x, y = coords_px[b]
+            for i in range(cnt):
+                base = 12 + i * 12
+                top = y - base - 5; bot = y - base + 5
+                cxm = x - 5; cxp = x + 5
+                l1 = cv.create_line(cxm, top, cxm, bot, fill=shunt_fill, width=3)
+                l2 = cv.create_line(cxp, top, cxp, bot, fill=shunt_fill, width=3)
+                l3 = cv.create_line(cxm, bot, cxp, bot, fill=edge_color, width=1)
+                for item in (l1, l2, l3):
+                    tag_and_meta(item, 'Shunt', f'shunt:{b}:{i+1}', f'Shunt {i+1} @ {b}')
+        for b in bus_sources:
+            if b not in coords_px:
+                continue
+            x, y = coords_px[b]
+            r = SRC_R
+            circ = cv.create_oval(x - r, y - r, x + r, y + r, outline=text_color, fill=source_fill, width=2)
+            bolt = cv.create_polygon(x, y-5, x+3, y, x+0, y+1, x+3, y+6, x-3, y+1, x+0, y, fill=text_color, outline='')
+            tag_and_meta(circ, 'VoltageSource', f'source:{b}', f'Source @ {b}')
+            tag_and_meta(bolt, 'VoltageSource', f'source:{b}', f'Source @ {b}')
+
+        # Centering and scrollregion
+        try:
+            bbox = cv.bbox('all')
+            if bbox:
+                x1, y1, x2, y2 = bbox
+                cv.configure(scrollregion=(x1 - 20, y1 - 20, x2 + 20, y2 + 20))
+        except Exception:
+            pass
+
+        # Bind clicks once
+        try:
+            cv.tag_bind('bus', '<Button-1>', self._on_map_item_click)
+            cv.tag_bind('edge', '<Button-1>', self._on_map_item_click)
+            cv.tag_bind('dev', '<Button-1>', self._on_map_item_click)
+        except Exception:
+            pass
+
+    def _on_map_item_click(self, event):
+        try:
+            cv = self.island_map
+            if cv is None:
+                return
+            items = cv.find_withtag('current')
+            if not items:
+                return
+            it = items[0]
+            tags = cv.gettags(it)
+            info = None
+            for t in tags:
+                if t in getattr(self, '_map_meta', {}):
+                    info = self._map_meta.get(t)
+                    break
+            if info is None:
+                # Edge/device tags also carry bus:/edge: prefixes
+                for t in tags:
+                    if t.startswith('bus:') or t.startswith('edge:'):
+                        info = {"id": t.split(':',1)[1], "type": 'item'}
+                        break
+            # Clear previous tooltip
+            try:
+                if getattr(self, '_tooltip_item', None):
+                    cv.delete(self._tooltip_item)
+            except Exception:
+                pass
+            if info is None:
+                return
+            x = cv.canvasx(event.x); y = cv.canvasy(event.y)
+            text = f"{info.get('type','item')}: {info.get('id','')}"
+            self._tooltip_item = cv.create_text(x + 12, y - 12, text=text, anchor='nw', fill=self.COL.get('TEXT', '#334155'), font=(self.UI_FONT, max(10, self.UI_SIZE)))
+        except Exception:
+            pass
+
+    # Unified OBJ interactions (orthogonal renderer)
+    def _show_callout(self, x: float, y: float, text: str) -> None:
+        try:
+            cv = self.island_map
+            if cv is None:
+                return
+            pad = 4
+            # remove old
+            if hasattr(self, '_callout'):
+                box = self._callout.get('box'); txt = self._callout.get('txt')
+                try:
+                    if box: cv.delete(box)
+                    if txt: cv.delete(txt)
+                except Exception:
+                    pass
+            x2 = min(x + 180, max(8, (cv.winfo_width() or 0) - 8))
+            y2 = max(y - 8, 8)
+            box = cv.create_rectangle(x2, y2-16, x2+160, y2+6, fill='#fffffe', outline='#888', width=1)
+            txt = cv.create_text(x2+pad, y2-5, text=text, anchor='w', fill=self.COL.get('TEXT', '#222'), font=(self.UI_FONT, max(9, self.UI_SIZE-1)))
+            self._callout = {'box': box, 'txt': txt}
+        except Exception:
+            pass
+
+    def _hide_callout(self) -> None:
+        try:
+            cv = self.island_map
+            if cv is None:
+                return
+            if hasattr(self, '_callout'):
+                box = self._callout.get('box'); txt = self._callout.get('txt')
+                try:
+                    if box: cv.delete(box)
+                    if txt: cv.delete(txt)
+                except Exception:
+                    pass
+                delattr(self, '_callout')
+        except Exception:
+            pass
+
+    def _highlight_group(self, item_id: int) -> None:
+        try:
+            cv = self.island_map
+            if cv is None:
+                return
+            text_color = self.COL.get('TEXT', '#222')
+            select_outline = self.COL.get('SELECT', '#6a0dad')
+            # clear prior
+            if hasattr(self, '_sel'):
+                for i in getattr(self, '_sel'):
+                    try:
+                        cv.itemconfig(i, width=1, outline=text_color)
+                    except Exception:
+                        pass
+            tags = cv.gettags(item_id)
+            id_tag = next((t for t in tags if t.startswith('id:')), None)
+            if not id_tag:
+                return
+            group = cv.find_withtag(id_tag)
+            for i in group:
+                try:
+                    cv.itemconfig(i, width=3, outline=select_outline)
+                except Exception:
+                    pass
+            self._sel = group
+        except Exception:
+            pass
+
+    def _on_obj_click(self, ev):
+        try:
+            cv = self.island_map
+            if cv is None:
+                return
+            items = cv.find_withtag('current')
+            if not items:
+                return
+            it = items[0]
+            md = getattr(self, 'meta', {}).get(it)
+            if not md:
+                # try to resolve via same id tag
+                tags = cv.gettags(it)
+                id_tag = next((t for t in tags if t.startswith('id:')), None)
+                if id_tag:
+                    grp = cv.find_withtag(id_tag)
+                    md = next((getattr(self, 'meta', {}).get(g) for g in grp if getattr(self, 'meta', {}).get(g)), None)
+            if not md:
+                return
+            self._highlight_group(it)
+            self._show_callout(ev.x, ev.y, f"{md.get('name', md.get('id',''))} ({md.get('type','')})")
+        except Exception:
+            pass
+
+    def _on_obj_hover_enter(self, ev):
+        try:
+            cv = self.island_map
+            if cv is None:
+                return
+            items = cv.find_withtag('current')
+            if items:
+                select_outline = self.COL.get('SELECT', '#6a0dad')
+                try:
+                    cv.itemconfig(items[0], width=3, outline=select_outline)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    def _on_obj_hover_leave(self, ev):
+        try:
+            cv = self.island_map
+            if cv is None:
+                return
+            items = cv.find_withtag('current')
+            if items:
+                text_color = self.COL.get('TEXT', '#222')
+                try:
+                    cv.itemconfig(items[0], width=1, outline=text_color)
+                except Exception:
+                    pass
+            self._hide_callout()
+        except Exception:
+            pass
+
 # ---- Entrypoint --------------------------------------------------------------
 def main():
     app = App()
@@ -1266,5 +3388,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-

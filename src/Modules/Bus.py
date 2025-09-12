@@ -6,7 +6,7 @@ import xml.etree.ElementTree as ET
 
 # replace with
 from Modules.General import safe_name, get_island_context
-from Modules.IslandFilter import is_bus_allowed
+from Modules.IslandFilter import is_bus_allowed, allowed_buses
 # (optional robust fallback for standalone use)
 try:
     from Modules.General import get_island_context  # already imported above; keeps Pylance happy
@@ -240,7 +240,7 @@ def _parse_bus_rows(input_path: Path) -> List[Dict]:
     # -------- PASS 1: scan sections (same pseudo filtering you had)
     BRANCH_TAGS = [
         "OverheadLine", "OverheadLineUnbalanced", "OverheadByPhase",
-        "Underground", "UndergroundCable", "UndergroundCableUnbalanced", "UndergroundByPhase",
+        "Underground", "UndergroundCable", "UndergroundCableUnbalanced", "UndergroundByPhase", "Cable",
         "Transformer",
         "Switch", "Fuse", "Recloser", "Breaker", "Sectionalizer", "Isolator",
         "Miscellaneous",  # NEW: allow endpoints/degree counting across meter/LA, etc.
@@ -248,7 +248,7 @@ def _parse_bus_rows(input_path: Path) -> List[Dict]:
     # Edges for voltage propagation: **exclude transformers**
     BRANCH_NO_XFMR_TAGS = [
         "OverheadLine", "OverheadLineUnbalanced", "OverheadByPhase",
-        "Underground", "UndergroundCable", "UndergroundCableUnbalanced", "UndergroundByPhase",
+        "Underground", "UndergroundCable", "UndergroundCableUnbalanced", "UndergroundByPhase", "Cable",
         "Switch", "Fuse", "Recloser", "Breaker", "Sectionalizer", "Isolator",
         "Miscellaneous",  # NEW: treat as a conducting link (no voltage change)
     ]
@@ -427,6 +427,101 @@ def _parse_bus_rows(input_path: Path) -> List[Dict]:
     xf_pairs = _collect_transformers_with_kvll(root)
     _propagate_ln_via_transformers(hv_ln_assign, adj, xf_pairs)
 
+    # -------- Expand kept buses across non-transformer branches
+    # Include buses reachable via lines/cables/switches from allowed islands,
+    # even if they belong to islands without sources, so downstream cables/lines
+    # are not left dangling.
+    from Modules.IslandFilter import allowed_buses as _allowed_buses
+    allowed_set_for_bfs: Set[str] = set(_allowed_buses())
+    expanded_keep: Set[str] = set()
+    from collections import deque as _dq
+    seen_bfs: Set[str] = set()
+    q = _dq(n for n in allowed_set_for_bfs if n in adj)
+    seen_bfs |= set(q)
+    while q:
+        u = q.popleft()
+        for v in adj.get(u, ()):  # non-transformer adjacency
+            if v not in seen_bfs:
+                seen_bfs.add(v)
+                q.append(v)
+            if v not in allowed_set_for_bfs:
+                expanded_keep.add(v)
+
+    # -------- Source operating LN voltages and angles (per island, per-phase p.u.)
+    # Build node -> (KVLL, OperatingVoltage1..3 LN, OperatingAngle1..3) and per-phase p.u.
+    node_oper_mag: Dict[str, Dict[str, float]] = {}
+    node_oper_pu: Dict[str, Dict[str, float]] = {}
+    for topo in root.findall(".//Topo"):
+        ntype = (topo.findtext("NetworkType") or "").strip().lower()
+        eq_mode = (topo.findtext("EquivalentMode") or "").strip()
+        if ntype != "substation" or eq_mode == "1":
+            continue
+        srcs = topo.find("./Sources")
+        if srcs is None:
+            continue
+        for src in srcs.findall("./Source"):
+            nid = safe_name(src.findtext("SourceNodeID"))
+            eq = src.find("./EquivalentSourceModels/EquivalentSourceModel/EquivalentSource")
+            if not nid or eq is None:
+                continue
+            try:
+                kvll_txt = eq.findtext("KVLL")
+                kvll_kv = float(kvll_txt) if kvll_txt not in (None, "") else None
+            except Exception:
+                kvll_kv = None
+            def fnum(txt: str | None) -> float | None:
+                try:
+                    return float(txt) if txt not in (None, "") else None
+                except Exception:
+                    return None
+            v1 = fnum(eq.findtext("OperatingVoltage1"))
+            v2 = fnum(eq.findtext("OperatingVoltage2"))
+            v3 = fnum(eq.findtext("OperatingVoltage3"))
+            a1 = fnum(eq.findtext("OperatingAngle1"))
+            a2 = fnum(eq.findtext("OperatingAngle2"))
+            a3 = fnum(eq.findtext("OperatingAngle3"))
+            if kvll_kv is None or v1 is None:
+                continue
+            node_oper_mag[nid] = {
+                "KVLL": kvll_kv * 1000.0,
+                "VopA": v1 * 1000.0 if v1 < 1e3 else v1,  # tolerate kV or V
+                "VopB": v2 * 1000.0 if (v2 is not None and v2 < 1e3) else (v2 if v2 is not None else v1),
+                "VopC": v3 * 1000.0 if (v3 is not None and v3 < 1e3) else (v3 if v3 is not None else v1),
+                "AngA": a1 if a1 is not None else 0.0,
+                "AngB": a2 if a2 is not None else -120.0,
+                "AngC": a3 if a3 is not None else 120.0,
+            }
+            # per-phase primary p.u. magnitudes
+            import math
+            vbase_ln = (kvll_kv * 1000.0) / math.sqrt(3.0)
+            va = node_oper_mag[nid]["VopA"]/vbase_ln if vbase_ln else 1.0
+            vb = node_oper_mag[nid]["VopB"]/vbase_ln if vbase_ln else 1.0
+            vc = node_oper_mag[nid]["VopC"]/vbase_ln if vbase_ln else 1.0
+            node_oper_pu[nid] = {"A": float(va), "B": float(vb), "C": float(vc)}
+
+    # Island context to map to a source slack per island
+    from Modules.General import get_island_context
+    ctx = get_island_context() or {}
+    bus_to_island: Dict[str, int] = dict(ctx.get("bus_to_island", {}))
+    slack_per_island: Dict[int, str] = dict(ctx.get("slack_per_island", {}))
+
+    island_init_pu: Dict[int, Dict[str, float]] = {}
+    island_init_ang: Dict[int, Dict[str, float]] = {}
+    for isl, slack_node in slack_per_island.items():
+        data = node_oper_mag.get(slack_node)
+        if data:
+            pu = node_oper_pu.get(slack_node, {"A": 1.0, "B": 1.0, "C": 1.0})
+            island_init_pu[isl] = {"A": pu["A"], "B": pu["B"], "C": pu["C"]}
+            island_init_ang[isl] = {
+                "A": data["AngA"],
+                "B": data["AngB"],
+                "C": data["AngC"],
+            }
+        else:
+            # fallback: use base LN and default angles
+            island_init_pu[isl] = {"A": 1.0, "B": 1.0, "C": 1.0}
+            island_init_ang[isl] = {"A": 0.0, "B": -120.0, "C": 120.0}
+
     # -------- Island context
     ctx = get_island_context() or {}
     bad_buses: Set[str] = set(ctx.get("bad_buses", set()))
@@ -437,10 +532,28 @@ def _parse_bus_rows(input_path: Path) -> List[Dict]:
     def pkey(p: str) -> int:
         return PHASES.index(p)
 
+    # Keep boundary buses: endpoints of a branch where the opposite endpoint is allowed
+    # but this node would be filtered out by island policy. Ensures no "line to nothing".
+    allowed_set = set(allowed_buses())
+    boundary_keep: Set[str] = set()
+    for sec in root.findall(".//Sections/Section"):
+        f = safe_name(sec.findtext("./FromNodeID"))
+        t = safe_name(sec.findtext("./ToNodeID"))
+        if not f or not t:
+            continue
+        if not _has_any(sec, BRANCH_TAGS):
+            continue
+        f_allowed = f in allowed_set
+        t_allowed = t in allowed_set
+        if f_allowed and not t_allowed:
+            boundary_keep.add(t)
+        elif t_allowed and not f_allowed:
+            boundary_keep.add(f)
+
     rows: List[Dict] = []
     for node in sorted(node_phases):
         # Keep only buses that are allowed by the island filter
-        if not is_bus_allowed(node):
+        if not is_bus_allowed(node) and node not in boundary_keep and node not in expanded_keep:
             continue
         island = bus_to_island.get(node)
         is_in_bad_island = node in bad_buses
@@ -463,14 +576,24 @@ def _parse_bus_rows(input_path: Path) -> List[Dict]:
             should_comment = is_in_bad_island or (bus_type != "SLACK" and not is_active)
             if should_comment:
                 bus_name = "//" + bus_name
+            # Initialize: only set source node to operating LN; all other buses = nominal base LN
+            is_source_node = (island is not None and slack_per_island.get(island) == node)
+            if is_source_node:
+                isl_pu = island_init_pu.get(island, {}) if island is not None else {}
+                isl_ang = island_init_ang.get(island, {}) if island is not None else {}
+                init_v = (isl_pu.get(ph, 1.0) * node_ln_v)
+                init_ang = isl_ang.get(ph, 0.0 if ph == "A" else (-120.0 if ph == "B" else 120.0))
+            else:
+                init_v = node_ln_v
+                init_ang = phase_ang.get(ph, 0.0 if ph == "A" else (-120.0 if ph == "B" else 120.0))
 
             rows.append(
                 {
                     "Bus": bus_name,
                     "Base Voltage (V)": node_ln_v,   # per-phase base LN volts
-                    "Initial Vmag": node_ln_v,       # equal to base for initialization
+                    "Initial Vmag": init_v,          # initialize to source operating LN across island
                     "Unit": "V",
-                    "Angle": phase_ang.get(ph, 0.0),
+                    "Angle": init_ang,
                     "Type": bus_type,
                 }
             )
